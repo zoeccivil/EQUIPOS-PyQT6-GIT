@@ -7,6 +7,66 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added - PR #3: Complete Entity Management with Contact Information
+
+#### Database Migration
+- **Added**: Automatic migration to add `telefono` and `cedula` columns to `equipos_entidades` table
+- **Enhanced**: `asegurar_tabla_equipos_entidades()` now includes column migration
+- Safe migration: checks if columns exist before adding (idempotent)
+- Backward compatible: handles existing databases gracefully
+
+#### Entity Management Features
+- **Complete**: Full CRUD for entities (Clientes/Operadores) with contact information
+- **Fields**: Name, Telefono, Cedula/RNC, Active status
+- **UI**: `VentanaGestionEntidad` already supports displaying and editing all fields
+- **Validation**: Telefono and cedula are optional fields
+- **ID column**: Hidden in UI but used for edit/delete operations
+
+#### Methods Enhanced in logic.py
+- `asegurar_tabla_equipos_entidades()` - Now adds telefono/cedula columns via ALTER TABLE
+- `guardar_entidad()` - Already supports telefono/cedula (no changes needed)
+- `obtener_entidad_por_id()` - Retrieves entity with all fields including contact info
+- `eliminar_entidad()` - Marks entity as inactive
+- `obtener_entidades_equipo_por_tipo()` - Returns all fields including telefono/cedula
+
+#### UI Features (ventana_gestion_entidad.py)
+Already implemented and working:
+- ✅ Table with columns: ID (hidden), Name, Telefono, Cedula/RNC, Status
+- ✅ Add/Edit/Delete buttons
+- ✅ Dialog for entity creation and editing
+- ✅ Validation (name required, telefono/cedula optional)
+- ✅ Status toggle (Active/Inactive)
+- ✅ Handles NULL values gracefully
+
+#### Testing
+- **New**: `tests/test_entity_management.py` with 6 comprehensive tests
+- All tests pass ✅
+- Tests cover:
+  - Creating entity with telefono/cedula
+  - Creating entity without telefono/cedula (optional)
+  - Updating entity to add contact information
+  - Retrieving entity by ID
+  - Deleting entity (marking inactive)
+  - Table migration (column addition)
+
+#### Database Schema
+Before (missing columns):
+```sql
+CREATE TABLE equipos_entidades (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    nombre TEXT NOT NULL,
+    tipo TEXT NOT NULL,
+    proyecto_id INTEGER,
+    activo INTEGER DEFAULT 1
+)
+```
+
+After (with migration):
+```sql
+ALTER TABLE equipos_entidades ADD COLUMN telefono TEXT;
+ALTER TABLE equipos_entidades ADD COLUMN cedula TEXT;
+```
+
 ### Added - PR #2: Fix Edit Alquiler Duplication Bug
 
 #### Bug Fix
