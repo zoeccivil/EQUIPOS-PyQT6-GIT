@@ -237,22 +237,52 @@ class RegistroAlquileresTab(QWidget):
         self.editar_alquiler(alquiler_id)
 
     def editar_alquiler(self, transaccion_id):
+        """
+        Edit an existing rental transaction.
+        
+        CRITICAL FIX: Ensures the dialog is in edit mode to prevent duplicate entries.
+        The dialog will set self.transaccion_id and only close on accept,
+        then this method performs the actual UPDATE.
+        """
+        # Get existing rental data
         datos = self.db.obtener_detalles_alquiler(transaccion_id)
         if not datos:
             QMessageBox.warning(self, "Error", "No se pudieron cargar los datos del alquiler.")
             return
+        
+        # Verify the data has an ID (critical for edit mode)
+        if not datos.get('id'):
+            logging.error(f"obtener_detalles_alquiler returned data without 'id' for transaccion_id={transaccion_id}")
+            QMessageBox.critical(self, "Error", "Los datos del alquiler no tienen ID. No se puede editar.")
+            return
 
-        print(f"[DEBUG] Llamando DialogoAlquiler (edición) con config: {self.config}")
+        logging.info(f"Opening edit dialog for alquiler with ID: {transaccion_id}")
+        print(f"[DEBUG] Calling DialogoAlquiler (edit mode) with config: {self.config}")
+        
+        # Open dialog in edit mode (alquiler parameter triggers edit mode)
         dialog = DialogoAlquiler(
             self.db, self.proyecto_actual,
             self.clientes_mapa, self.operadores_mapa, self.equipos_mapa,
             alquiler=dict(datos), config=self.config, parent=self
         )
+        
+        # If dialog accepted, get new data and update
         if dialog.exec():
             nuevos_datos = dialog.get_datos()
-            self.db.actualizar_alquiler(transaccion_id, nuevos_datos)
-            QMessageBox.information(self, "Éxito", "Alquiler actualizado correctamente.")
-            self.refrescar_tabla()
+            
+            # Perform the UPDATE using DatabaseManager
+            # Note: In future PRs, this will use repository pattern
+            success = self.db.actualizar_alquiler(transaccion_id, nuevos_datos)
+            
+            if success:
+                QMessageBox.information(self, "Éxito", "Alquiler actualizado correctamente.")
+                logging.info(f"Alquiler {transaccion_id} updated successfully")
+                self.refrescar_tabla()
+            else:
+                QMessageBox.warning(self, "Error", "No se pudo actualizar el alquiler en la base de datos.")
+                logging.error(f"Failed to update alquiler {transaccion_id}")
+        else:
+            logging.info(f"Edit dialog cancelled for alquiler {transaccion_id}")
 
 
     def on_eliminar_alquiler_boton(self):

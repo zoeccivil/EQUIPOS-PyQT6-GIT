@@ -7,6 +7,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added - PR #2: Fix Edit Alquiler Duplication Bug
+
+#### Bug Fix
+- **Fixed**: Editing a rental (alquiler) no longer creates duplicate transactions
+- **Enhanced**: Added validation to ensure transaction ID is present when opening edit dialog
+- **Improved**: Better error handling and logging in edit workflow
+
+#### Changes to dialogo_alquiler.py
+- Enhanced `set_datos()` method with strict validation for transaction ID
+- Raises ValueError if edit mode is attempted without transaction ID
+- Added comprehensive logging for edit vs create mode detection
+- Improved documentation explaining the edit workflow
+
+#### Changes to registro_alquileres_tab.py
+- Enhanced `editar_alquiler()` method with better error handling
+- Added validation to ensure loaded data contains transaction ID
+- Improved logging throughout the edit workflow
+- Added success/failure feedback for database operations
+- Better separation of concerns (dialog validates/closes, tab performs UPDATE)
+
+#### Testing
+- **New**: `tests/test_edit_alquiler_fix.py` - Automated test verifying no duplicates on edit
+- Test creates, edits, and verifies transaction count remains the same
+- All tests pass ✅
+
+#### Technical Details
+The fix ensures that:
+1. When DialogoAlquiler is opened with `alquiler` parameter, it sets `self.transaccion_id`
+2. The `set_datos()` method validates the ID is present and raises error if missing
+3. When `guardar_alquiler()` is called, it detects edit mode via `self.transaccion_id`
+4. In edit mode, dialog only validates and closes (no INSERT)
+5. The calling code (`registro_alquileres_tab`) performs the actual UPDATE
+6. Transaction count verification ensures no duplicates
+
 ### Added - PR #1: Repository Abstraction Pattern
 
 #### Repository Layer
