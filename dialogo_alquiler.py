@@ -292,18 +292,24 @@ class DialogoAlquiler(QDialog):
     def guardar_alquiler(self):
         """
         Guarda (INSERT) o actualiza (UPDATE) el alquiler según si self.transaccion_id existe.
+        
+        CRITICAL FIX: In edit mode, this method only validates and closes the dialog.
+        The actual UPDATE is performed by registro_alquileres_tab.editar_alquiler()
+        after this dialog closes with accept().
         """
         try:
             datos = self.get_datos()
             db = self.db
 
-            # --- MODO EDICIÓN: Solo cerrar el diálogo, registro_alquileres_tab se encarga ---
+            # --- MODO EDICIÓN: Only close dialog, registro_alquileres_tab handles update ---
             if self.transaccion_id:
-                logger.info("Modo edición detectado (transaccion_id=%s), cerrando diálogo", self.transaccion_id)
+                logger.info("Edit mode detected (transaccion_id=%s), closing dialog for update", self.transaccion_id)
+                # Dialog will return datos via get_datos() which will be used by caller
                 self.accept()
                 return
 
-            # --- MODO CREACIÓN: Insertar nuevo alquiler ---
+            # --- MODO CREACIÓN: Insert new rental ---
+            logger.info("Create mode detected, inserting new rental transaction")
             
             # 1. Obtener la cuenta principal del proyecto 8
             row = db.fetchone("SELECT cuenta_principal FROM proyectos WHERE id = 8")
@@ -410,9 +416,17 @@ class DialogoAlquiler(QDialog):
     def set_datos(self, datos):
         """
         Rellenar campos para edición.
+        CRITICAL FIX: Ensure transaccion_id is set to mark edit mode.
         """
-        # ⚠️ CRÍTICO: Asignar el ID para que guardar_alquiler() sepa que es edición
+        # ⚠️ CRITICAL: Set the ID so guardar_alquiler() knows this is edit mode
+        # This prevents duplicate entries when editing an existing rental
         self.transaccion_id = datos.get('id')
+        
+        if not self.transaccion_id:
+            logger.error("set_datos called with missing 'id' in datos: %s", datos)
+            raise ValueError("Cannot set datos for edit mode without transaction ID")
+        
+        logger.info("Edit mode activated for transaccion_id=%s", self.transaccion_id)
         
         if isinstance(datos.get('fecha'), str):
             try:

@@ -1,0 +1,92 @@
+# Firebase credentials - NEVER commit these!
+serviceAccount.json
+firebase-credentials.json
+firebase-admin-*.json
+
+# Database files
+*.db
+*.db-journal
+*.sqlite
+*.sqlite3
+
+# Database backups
+backups/
+*.backup
+*.db.backup
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual environments
+venv/
+env/
+ENV/
+.venv
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Logs
+*.log
+progain.log
+migration_log.txt
+migration_summary.json
+mapping.json
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.hypothesis/
+
+# Temporary files
+*.tmp
+*.temp
+/tmp/
+temp/
+
+# OS files
+Thumbs.db
+.DS_Store
+
+# Excel exports and reports
+*.xlsx
+Diagnostico_*.xlsx
+Reporte_*.xlsx
+Resultado_*.xlsx
+Lista_*.xlsx
+
+# Adjuntos (attachments) - may contain sensitive data
+# Uncomment if you want to exclude attachments from version control
+# adjuntos/
+# conduces/
+
+# Migration artifacts
+migration_artifacts/
+firebase_migration/

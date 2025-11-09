@@ -1390,7 +1390,11 @@ class DatabaseManager:
 
 
     def asegurar_tabla_equipos_entidades(self):
-        """Crea la tabla equipos_entidades si no existe (para Clientes y Operadores)."""
+        """
+        Crea la tabla equipos_entidades si no existe (para Clientes y Operadores).
+        Incluye migracion para añadir columnas telefono y cedula si no existen.
+        """
+        # Crear tabla base
         query = """
             CREATE TABLE IF NOT EXISTS equipos_entidades (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1403,6 +1407,29 @@ class DatabaseManager:
         """
         self.execute(query)
         logger.info("Tabla equipos_entidades asegurada")
+        
+        # Migración: añadir columnas telefono y cedula si no existen
+        try:
+            # Intentar añadir columna telefono
+            self.execute("ALTER TABLE equipos_entidades ADD COLUMN telefono TEXT")
+            logger.info("Columna 'telefono' añadida a equipos_entidades")
+        except Exception as e:
+            # Columna ya existe o error - esto es OK
+            if "duplicate column" in str(e).lower():
+                logger.debug("Columna 'telefono' ya existe en equipos_entidades")
+            else:
+                logger.debug(f"No se pudo añadir columna telefono: {e}")
+        
+        try:
+            # Intentar añadir columna cedula
+            self.execute("ALTER TABLE equipos_entidades ADD COLUMN cedula TEXT")
+            logger.info("Columna 'cedula' añadida a equipos_entidades")
+        except Exception as e:
+            # Columna ya existe o error - esto es OK
+            if "duplicate column" in str(e).lower():
+                logger.debug("Columna 'cedula' ya existe en equipos_entidades")
+            else:
+                logger.debug(f"No se pudo añadir columna cedula: {e}")
 
     def guardar_entidad(self, datos, entidad_id=None):
         """
