@@ -1,0 +1,91 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+pip-wheel-metadata/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual environments
+venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Firebase credentials - NEVER COMMIT
+serviceAccount.json
+*serviceAccount*.json
+firebase-key*.json
+
+# Database backups
+backups/
+*.db.backup
+*.db.bak
+*.backup
+
+# Migration artifacts
+mapping*.json
+migration_log*.txt
+migration_summary*.json
+
+# Logs
+*.log
+progain.log
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+
+# Build artifacts
+*.spec
+build/
+dist/
+
+# Reports and exports (generated files)
+Diagnostico_*.xlsx
+Reporte_*.xlsx
+Resultado_*.xlsx
+Lista_*.xlsx
+
+# Adjuntos (attachments) - optional, depending on strategy
+# adjuntos/
+
+# PyQt cache
+.qmake.stash
+*.pro.user
+*.pro.user.*
+
+# OS-specific
+Thumbs.db
+.DS_Store
+
+# Test databases
+test*.db
+*_test.db
