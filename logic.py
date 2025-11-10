@@ -1416,6 +1416,8 @@ class DatabaseManager:
                 tipo TEXT NOT NULL,
                 proyecto_id INTEGER,
                 activo INTEGER DEFAULT 1,
+                telefono TEXT,
+                cedula TEXT,
                 UNIQUE(nombre, tipo, proyecto_id)
             )
         """
