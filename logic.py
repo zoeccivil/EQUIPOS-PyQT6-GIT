@@ -380,7 +380,8 @@ class DatabaseManager:
                 precio_por_hora REAL,
                 conduce TEXT,
                 ubicacion TEXT,
-                conduce_adjunto_path TEXT
+                conduce_adjunto_path TEXT,
+                equipo_id INTEGER
             )
         """)
         self._conn.commit()
@@ -954,24 +955,41 @@ class DatabaseManager:
 
     def actualizar_alquiler(self, transaccion_id, datos):
         """
-        Actualiza un alquiler existente en la tabla 'transacciones'.
+        Actualiza un alquiler existente en la tabla 'transacciones' y 'equipos_alquiler_meta'.
         """
         try:
-            # Construimos la parte SET de la consulta dinámicamente
+            # 1. Actualizar tabla transacciones
             set_clauses = [f"{key} = :{key}" for key in datos.keys()]
             set_string = ", ".join(set_clauses)
             
             query = f"UPDATE transacciones SET {set_string} WHERE id = :transaccion_id"
             
-            # Añadimos el ID de la transacción al diccionario de parámetros
             params = datos.copy()
             params['transaccion_id'] = transaccion_id
             
             self._ejecutar_consulta(query, params, commit=True)
-            print(f"[INFO] Alquiler con ID {transaccion_id} actualizado exitosamente.")
+            
+            # 2. Actualizar tabla equipos_alquiler_meta (campos relacionados con alquiler)
+            # Solo actualizar los campos que existen en esa tabla
+            meta_fields = ['cliente_id', 'operador_id', 'horas', 'precio_por_hora', 
+                          'conduce', 'ubicacion', 'conduce_adjunto_path', 'equipo_id']
+            meta_datos = {k: v for k, v in datos.items() if k in meta_fields}
+            
+            if meta_datos:
+                meta_set_clauses = [f"{key} = :{key}" for key in meta_datos.keys()]
+                meta_set_string = ", ".join(meta_set_clauses)
+                
+                meta_query = f"UPDATE equipos_alquiler_meta SET {meta_set_string} WHERE transaccion_id = :transaccion_id"
+                
+                meta_params = meta_datos.copy()
+                meta_params['transaccion_id'] = transaccion_id
+                
+                self._ejecutar_consulta(meta_query, meta_params, commit=True)
+            
+            logger.info(f"Alquiler con ID {transaccion_id} actualizado exitosamente en transacciones y equipos_alquiler_meta.")
             return True
         except Exception as e:
-            print(f"[ERROR] No se pudo actualizar el alquiler con ID {transaccion_id}: {e}")
+            logger.error(f"No se pudo actualizar el alquiler con ID {transaccion_id}: {e}")
             return False
 
 
