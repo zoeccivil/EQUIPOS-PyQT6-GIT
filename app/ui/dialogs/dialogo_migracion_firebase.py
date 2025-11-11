@@ -144,9 +144,6 @@ class MigrationWorker(QThread):
         finally:
             if migrator:
                 migrator.close()
-            logger.exception(error_msg)
-            self.log.emit(f"ERROR: {error_msg}")
-            self.finished.emit(False, error_msg)
     
     def stop(self):
         """Request the worker to stop"""
