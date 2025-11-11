@@ -1,5 +1,5 @@
 from PyQt6.QtWidgets import (
-    QApplication, QMainWindow, QTabWidget, QFileDialog, QMessageBox, QMenuBar, QMenu
+    QApplication, QMainWindow, QTabWidget, QFileDialog, QMessageBox, QMenuBar, QMenu, QActionGroup
 )
 from PyQt6.QtGui import QAction
 from PyQt6.QtCore import QTimer
@@ -69,6 +69,9 @@ class AppGUI(QMainWindow):
         
         # 2.5. Crear status bar con indicador de fuente de datos
         self._create_status_bar()
+        
+        # 2.6. Aplicar tema desde configuración
+        self._apply_saved_theme()
 
         # 3. Cargar configuración
         self.config = config_manager.cargar_configuracion()
@@ -136,6 +139,16 @@ class AppGUI(QMainWindow):
         config_menu.addAction("Seleccionar Carpeta CONDUCES", self.seleccionar_carpeta_conduces)
         config_menu.addSeparator()
         config_menu.addAction("Fuente de Datos (SQLite/Firestore)...", self._abrir_configuracion_fuente_datos)
+        config_menu.addSeparator()
+        
+        # Theme submenu
+        self.menu_tema = config_menu.addMenu("Tema")
+        self._create_theme_menu()
+        
+        # Apariencia menu (alternative location)
+        apariencia_menu = menubar.addMenu("Apariencia")
+        self.menu_tema_apariencia = apariencia_menu.addMenu("Tema")
+        self._create_theme_menu_apariencia()
         
         # Firebase migration menu
         herramientas_menu = menubar.addMenu("Herramientas")
@@ -636,6 +649,96 @@ class AppGUI(QMainWindow):
             # Ahora puedes usar 'filtros' para tu función de reporte
             print(filtros)
             # Ejemplo: self.generar_reporte_detallado_excel(filtros)
+    
+    def _apply_saved_theme(self):
+        """Apply theme from settings on startup"""
+        try:
+            from app.ui.themes.theme_manager import apply_theme_from_settings
+            apply_theme_from_settings(QApplication.instance())
+        except Exception as e:
+            print(f"Could not apply theme: {e}")
+    
+    def _create_theme_menu(self):
+        """Create theme submenu in Configuración menu"""
+        try:
+            from app.ui.themes.theme_manager import list_themes, get_current_theme
+            
+            themes = list_themes()
+            theme_group = QActionGroup(self)
+            theme_group.setExclusive(True)
+            
+            current = get_current_theme()
+            
+            for theme_info in themes:
+                action = QAction(theme_info['name'], self)
+                action.setCheckable(True)
+                action.setData(theme_info['id'])
+                
+                if current == theme_info['id']:
+                    action.setChecked(True)
+                
+                action.triggered.connect(
+                    lambda checked, tid=theme_info['id']: self._cambiar_tema(tid)
+                )
+                
+                theme_group.addAction(action)
+                self.menu_tema.addAction(action)
+                
+        except Exception as e:
+            print(f"Could not create theme menu: {e}")
+    
+    def _create_theme_menu_apariencia(self):
+        """Create theme submenu in Apariencia menu"""
+        try:
+            from app.ui.themes.theme_manager import list_themes, get_current_theme
+            
+            themes = list_themes()
+            theme_group = QActionGroup(self)
+            theme_group.setExclusive(True)
+            
+            current = get_current_theme()
+            
+            for theme_info in themes:
+                action = QAction(theme_info['name'], self)
+                action.setCheckable(True)
+                action.setData(theme_info['id'])
+                
+                if current == theme_info['id']:
+                    action.setChecked(True)
+                
+                action.triggered.connect(
+                    lambda checked, tid=theme_info['id']: self._cambiar_tema(tid)
+                )
+                
+                theme_group.addAction(action)
+                self.menu_tema_apariencia.addAction(action)
+                
+        except Exception as e:
+            print(f"Could not create theme menu: {e}")
+    
+    def _cambiar_tema(self, theme_id):
+        """Apply selected theme and save to settings"""
+        try:
+            from app.ui.themes.theme_manager import apply_theme
+            from app.app_settings import get_app_settings
+            
+            # Apply theme
+            apply_theme(QApplication.instance(), theme_id)
+            
+            # Save to settings
+            settings = get_app_settings()
+            settings.set_value('theme', theme_id)
+            settings.save()
+            
+            print(f"Theme changed to: {theme_id}")
+            
+        except Exception as e:
+            print(f"Could not change theme: {e}")
+            QMessageBox.warning(
+                self,
+                "Error de Tema",
+                f"No se pudo aplicar el tema:\n{str(e)}"
+            )
 
 
 
