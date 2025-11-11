@@ -15,6 +15,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspa
 from logic import DatabaseManager
 from app.repo.abstract_repository import AbstractRepository
 from app.repo.sqlite_repository import SQLiteRepository
+from app.repo.firestore_repository import FirestoreRepository
 
 
 class RepositoryFactory:
@@ -68,14 +69,8 @@ class RepositoryFactory:
             
         Returns:
             A FirestoreRepository instance
-            
-        Raises:
-            NotImplementedError: Firestore repository not yet implemented
         """
-        raise NotImplementedError(
-            "Firestore repository will be implemented in a future PR. "
-            "Currently only SQLite is supported."
-        )
+        return FirestoreRepository(credentials_path, project_id)
     
     @staticmethod
     def create_default_repository(config: Optional[dict] = None) -> AbstractRepository:
@@ -105,3 +100,26 @@ class RepositoryFactory:
             return RepositoryFactory.create_firestore_repository(credentials_path, project_id)
         else:
             raise ValueError(f"Unknown repository backend: {backend}")
+    
+    @staticmethod
+    def create_from_settings(settings) -> AbstractRepository:
+        """
+        Create repository based on app settings.
+        
+        Args:
+            settings: AppSettings instance
+            
+        Returns:
+            Repository instance (SQLite or Firestore)
+        """
+        data_source = settings.get_data_source()
+        
+        if data_source == 'firestore':
+            config = settings.get_firestore_config()
+            return RepositoryFactory.create_firestore_repository(
+                credentials_path=config['service_account'],
+                project_id=config['project_id']
+            )
+        else:  # default to sqlite
+            db_path = settings.get_sqlite_path()
+            return RepositoryFactory.create_sqlite_repository(db_path)
