@@ -1,13 +1,8 @@
-"""
-Firebase Migration Dialog
-
-Provides a GUI for migrating SQLite data to Firebase Firestore.
-Includes dry-run mode, progress tracking, backup creation, and logging.
-"""
 import os
 import json
 import shutil
 import logging
+import sys
 from datetime import datetime
 from typing import Optional, Dict, List
 from PyQt6.QtWidgets import (
@@ -17,6 +12,11 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtCore import Qt, QThread, pyqtSignal
 from PyQt6.QtGui import QFont
+
+# Add parent directory to path to import FirebaseMigrator
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))))
+
+from app.migration.firebase_migrator import FirebaseMigrator
 
 
 logger = logging.getLogger(__name__)
@@ -39,11 +39,36 @@ class MigrationWorker(QThread):
         
     def run(self):
         """Execute the migration process"""
+        migrator = None
         try:
             self.log.emit(f"{'DRY RUN: ' if self.dry_run else ''}Migration started at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
             
-            # Simulated migration steps
+            # Initialize migrator
+            db_path = self.config.get('db_path')
+            service_account_path = self.config.get('service_account_path')
             tables = self.config.get('tables', [])
+            
+            self.log.emit(f"Initializing migrator...")
+            self.log.emit(f"  Database: {db_path}")
+            self.log.emit(f"  Service Account: {service_account_path}")
+            self.log.emit(f"  Tables: {', '.join(tables)}")
+            
+            migrator = FirebaseMigrator(db_path, service_account_path, self.dry_run)
+            
+            # Initialize connections
+            if not migrator.initialize_sqlite():
+                self.finished.emit(False, "Failed to initialize SQLite connection")
+                return
+            
+            if not migrator.initialize_firebase():
+                self.finished.emit(False, "Failed to initialize Firebase connection")
+                return
+            
+            # Forward migrator logs to UI
+            for log_msg in migrator.migration_log:
+                self.log.emit(log_msg)
+            
+            # Migrate tables
             total_tables = len(tables)
             
             for i, table in enumerate(tables):
@@ -51,23 +76,74 @@ class MigrationWorker(QThread):
                     self.log.emit("Migration cancelled by user")
                     self.finished.emit(False, "Migration cancelled")
                     return
-                    
+                
                 percentage = int((i / total_tables) * 100)
-                self.progress.emit(f"Processing table: {table}", percentage)
-                self.log.emit(f"{'[DRY RUN] ' if self.dry_run else ''}Migrating table: {table}")
+                self.progress.emit(f"Migrating table: {table}", percentage)
                 
-                # Simulate work
-                self.msleep(500)
+                # Perform migration
+                migrated, skipped, errors = migrator.migrate_table(table)
                 
-                self.log.emit(f"  ✓ Table {table} completed")
+                # Forward new logs
+                for log_msg in migrator.migration_log[-10:]:  # Last 10 log entries
+                    if log_msg not in getattr(self, '_logged_messages', set()):
+                        self.log.emit(log_msg)
+                        if not hasattr(self, '_logged_messages'):
+                            self._logged_messages = set()
+                        self._logged_messages.add(log_msg)
             
+            # Handle attachments if transacciones table was migrated
+            if 'transacciones' in tables or 'equipos_alquiler_meta' in tables:
+                self.log.emit("Checking for attachments...")
+                attachments_uploaded = migrator.migrate_attachments(
+                    'transacciones',
+                    'conduce_adjunto_path'
+                )
+                self.log.emit(f"Attachments uploaded: {attachments_uploaded}")
+            
+            # Save migration artifacts
+            self.progress.emit("Saving migration artifacts...", 95)
+            
+            if not self.dry_run:
+                migrator.save_mapping()
+                self.log.emit("✓ ID mapping saved to mapping.json")
+            
+            migrator.save_log()
+            self.log.emit("✓ Migration log saved to migration_log.txt")
+            
+            migrator.save_summary()
+            self.log.emit("✓ Summary saved to migration_summary.json")
+            
+            # Complete
             self.progress.emit("Migration completed!", 100)
-            success_msg = f"{'Dry run' if self.dry_run else 'Migration'} completed successfully"
-            self.log.emit(success_msg)
-            self.finished.emit(True, success_msg)
+            
+            # Build summary message
+            stats = migrator.stats
+            summary_lines = [
+                f"{'Dry run' if self.dry_run else 'Migration'} completed successfully!",
+                "",
+                f"Total records: {stats['total_records']}",
+                f"Migrated: {stats['migrated']}",
+                f"Skipped (duplicates): {stats['skipped']}",
+                f"Errors: {stats['errors']}"
+            ]
+            summary_msg = "\n".join(summary_lines)
+            
+            self.log.emit("")
+            self.log.emit("=" * 50)
+            for line in summary_lines:
+                self.log.emit(line)
+            self.log.emit("=" * 50)
+            
+            self.finished.emit(True, summary_msg)
             
         except Exception as e:
             error_msg = f"Migration error: {str(e)}"
+            logger.exception(error_msg)
+            self.log.emit(f"ERROR: {error_msg}")
+            self.finished.emit(False, error_msg)
+        finally:
+            if migrator:
+                migrator.close()
             logger.exception(error_msg)
             self.log.emit(f"ERROR: {error_msg}")
             self.finished.emit(False, error_msg)
