@@ -30,7 +30,8 @@ def test_migrator_initialization():
         # Create fake service account
         service_account = {
             'project_id': 'test-project',
-            'private_key': 'fake-key'
+            'private_key': 'fake-key',
+            'client_email': 'test@test-project.iam.gserviceaccount.com'
         }
         sa_path = os.path.join(temp_dir, 'serviceAccount.json')
         with open(sa_path, 'w') as f:
@@ -39,7 +40,7 @@ def test_migrator_initialization():
         # Initialize migrator
         migrator = FirebaseMigrator(temp_db, sa_path, dry_run=True)
         
-        assert migrator.db_path == temp_db, "DB path should match"
+        assert migrator.sqlite_path == temp_db, "DB path should match"
         assert migrator.dry_run == True, "Dry run should be enabled"
         
         # Initialize connections
@@ -72,7 +73,7 @@ def test_table_migration_dry_run():
         db.execute("INSERT INTO categorias (nombre) VALUES (?)", ("Test Category",))
         
         # Create service account
-        service_account = {'project_id': 'test-project', 'private_key': 'fake'}
+        service_account = {'project_id': 'test-project', 'private_key': 'fake', 'client_email': 'test@test.iam.gserviceaccount.com'}
         sa_path = os.path.join(temp_dir, 'serviceAccount.json')
         with open(sa_path, 'w') as f:
             json.dump(service_account, f)
@@ -113,7 +114,7 @@ def test_document_preparation():
         sa_path = os.path.join(temp_dir, 'serviceAccount.json')
         
         with open(sa_path, 'w') as f:
-            json.dump({'project_id': 'test', 'private_key': 'fake'}, f)
+            json.dump({'project_id': 'test', 'private_key': 'fake', 'client_email': 'test@test.iam.gserviceaccount.com'}, f)
         
         migrator = FirebaseMigrator(temp_db, sa_path, dry_run=True)
         
@@ -156,7 +157,7 @@ def test_migration_artifacts():
         
         sa_path = os.path.join(temp_dir, 'serviceAccount.json')
         with open(sa_path, 'w') as f:
-            json.dump({'project_id': 'test', 'private_key': 'fake'}, f)
+            json.dump({'project_id': 'test', 'private_key': 'fake', 'client_email': 'test@test.iam.gserviceaccount.com'}, f)
         
         migrator = FirebaseMigrator(temp_db, sa_path, dry_run=True)
         migrator.initialize_sqlite()
@@ -221,7 +222,7 @@ def test_batch_processing():
         
         sa_path = os.path.join(temp_dir, 'serviceAccount.json')
         with open(sa_path, 'w') as f:
-            json.dump({'project_id': 'test', 'private_key': 'fake'}, f)
+            json.dump({'project_id': 'test', 'private_key': 'fake', 'client_email': 'test@test.iam.gserviceaccount.com'}, f)
         
         migrator = FirebaseMigrator(temp_db, sa_path, dry_run=True)
         migrator.initialize_sqlite()

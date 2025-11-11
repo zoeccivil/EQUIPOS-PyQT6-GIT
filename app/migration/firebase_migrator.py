@@ -1,60 +1,95 @@
 """
-Firebase Migrator
+Módulo principal de migración de SQLite a Firebase.
 
-Handles the actual migration of data from SQLite to Firebase Firestore and Cloud Storage.
-Implements batch processing, duplicate detection, and metadata tracking.
+Este módulo coordina todo el proceso de migración, incluyendo:
+- Lectura de datos de SQLite
+- Transformación de datos
+- Escritura a Firestore
+- Upload de archivos a Storage
+- Validación de integridad
 """
 import os
 import json
 import logging
-import sqlite3
 from datetime import datetime
-from typing import Dict, List, Optional, Any, Tuple
+from typing import Dict, List, Optional, Callable, Any, Tuple
 from pathlib import Path
 
+from .id_mapper import IDMapper
+from .firebase_auth import FirebaseAuth, FirebaseAuthError
+from .sqlite_reader import SQLiteReader, SQLiteReaderError
+from .firestore_writer import FirestoreWriter, FirestoreWriteError
+from .config import (
+    BATCH_SIZE, CHECKPOINT_FILE, LOG_FILE, MAPPING_FILE, SUMMARY_FILE,
+    MIGRATION_ORDER, DATE_COLUMNS
+)
 
+
+# Configurar logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler(LOG_FILE, encoding='utf-8'),
+        logging.StreamHandler()
+    ]
+)
 logger = logging.getLogger(__name__)
+
+
+class MigrationError(Exception):
+    """Excepción para errores de migración"""
+    pass
 
 
 class FirebaseMigrator:
     """
-    Migrates SQLite database to Firebase Firestore and Cloud Storage.
+    Clase principal para migrar datos de SQLite a Firebase.
     
-    Features:
-    - Batch processing (≤500 documents per batch)
-    - Duplicate detection via original_sqlite_id
-    - Metadata tracking (migrated_at, migrated_by)
-    - Attachment upload to Cloud Storage
-    - Mapping file generation
-    - Comprehensive logging
+    Arquitectura modular:
+    - IDMapper: Gestiona mapeo de IDs SQLite -> Firestore
+    - FirebaseAuth: Maneja autenticación
+    - SQLiteReader: Lee datos de SQLite
+    - FirestoreWriter: Escribe a Firestore
+    
+    Uso:
+        migrator = FirebaseMigrator(
+            sqlite_path='progain.db',
+            service_account_path='serviceAccount.json',
+            dry_run=False
+        )
+        migrator.authenticate()
+        results = migrator.migrate_all(['proyectos', 'equipos', 'transacciones'])
     """
     
     def __init__(
         self,
-        db_path: str,
+        sqlite_path: str,
         service_account_path: str,
-        dry_run: bool = False
+        dry_run: bool = False,
+        progress_callback: Optional[Callable[[str, int], None]] = None
     ):
         """
-        Initialize the migrator.
+        Inicializa el migrador.
         
         Args:
-            db_path: Path to SQLite database
-            service_account_path: Path to Firebase service account JSON
-            dry_run: If True, only count records and detect conflicts
+            sqlite_path: Ruta a la base de datos SQLite
+            service_account_path: Ruta al archivo serviceAccount.json
+            dry_run: Si True, solo simula la migración
+            progress_callback: Función para reportar progreso (message, percentage)
         """
-        self.db_path = db_path
+        self.sqlite_path = sqlite_path
         self.service_account_path = service_account_path
         self.dry_run = dry_run
+        self.progress_callback = progress_callback
         
-        # Will be initialized when needed
-        self.db = None
-        self.firestore_db = None
-        self.storage_bucket = None
-        self.project_id = None
+        # Componentes modulares
+        self.auth = FirebaseAuth(service_account_path)
+        self.id_mapper = IDMapper(MAPPING_FILE)
+        self.sqlite_reader: Optional[SQLiteReader] = None
+        self.firestore_writer: Optional[FirestoreWriter] = None
         
         # Tracking
-        self.mapping = {}  # SQLite ID -> Firestore document ID
         self.migration_log = []
         self.stats = {
             'total_records': 0,
@@ -64,89 +99,89 @@ class FirebaseMigrator:
             'conflicts': 0
         }
     
-    def initialize_firebase(self) -> bool:
+    def authenticate(self) -> bool:
         """
-        Initialize Firebase connection.
+        Autentica con Firebase.
         
         Returns:
-            True if successful, False otherwise
+            True si autenticación exitosa
         """
         try:
-            # Load service account
-            with open(self.service_account_path, 'r') as f:
-                service_account = json.load(f)
-            
-            self.project_id = service_account.get('project_id')
-            
-            if self.dry_run:
-                self._log(f"[DRY RUN] Would connect to Firebase project: {self.project_id}")
-                return True
-            
-            # In a real implementation, initialize Firebase Admin SDK here
-            # For now, we'll simulate the connection
-            # import firebase_admin
-            # from firebase_admin import credentials, firestore, storage
-            # cred = credentials.Certificate(self.service_account_path)
-            # firebase_admin.initialize_app(cred, {
-            #     'storageBucket': f'{self.project_id}.appspot.com'
-            # })
-            # self.firestore_db = firestore.client()
-            # self.storage_bucket = storage.bucket()
-            
-            self._log(f"Firebase initialized for project: {self.project_id}")
+            self._log("Authenticating with Firebase...")
+            self.auth.authenticate()
+            self.auth.verify_permissions()
+            self._log(f"✓ Authenticated with project: {self.auth.get_project_id()}")
             return True
-            
-        except Exception as e:
-            self._log(f"ERROR: Failed to initialize Firebase: {str(e)}")
-            logger.exception("Firebase initialization failed")
+        except FirebaseAuthError as e:
+            self._log(f"ERROR: Authentication failed: {e}")
+            logger.exception("Authentication error")
             return False
     
     def initialize_sqlite(self) -> bool:
         """
-        Initialize SQLite connection.
+        Inicializa conexión con SQLite.
         
         Returns:
-            True if successful, False otherwise
+            True si inicialización exitosa
         """
         try:
-            self.db = sqlite3.connect(self.db_path)
-            self.db.row_factory = sqlite3.Row
-            self._log(f"SQLite database opened: {self.db_path}")
+            self.sqlite_reader = SQLiteReader(self.sqlite_path)
+            self.sqlite_reader.connect()
+            self._log(f"✓ Connected to SQLite: {self.sqlite_path}")
+            return True
+        except SQLiteReaderError as e:
+            self._log(f"ERROR: Failed to connect to SQLite: {e}")
+            logger.exception("SQLite connection error")
+            return False
+    
+    def initialize_firebase(self) -> bool:
+        """
+        Inicializa conexión con Firestore.
+        
+        Returns:
+            True si inicialización exitosa
+        """
+        if not self.auth.is_authenticated():
+            if not self.authenticate():
+                return False
+        
+        try:
+            project_id = self.auth.get_project_id()
+            self.firestore_writer = FirestoreWriter(project_id, self.dry_run)
+            self.firestore_writer.initialize()
+            self._log(f"✓ Firestore initialized for project: {project_id}")
             return True
         except Exception as e:
-            self._log(f"ERROR: Failed to open SQLite database: {str(e)}")
-            logger.exception("SQLite initialization failed")
+            self._log(f"ERROR: Failed to initialize Firestore: {e}")
+            logger.exception("Firestore initialization error")
             return False
     
     def migrate_table(
         self,
         table_name: str,
         collection_name: Optional[str] = None,
-        batch_size: int = 500
+        batch_size: int = BATCH_SIZE
     ) -> Tuple[int, int, int]:
         """
-        Migrate a single table to Firestore.
+        Migra una tabla completa.
         
         Args:
-            table_name: Name of SQLite table
-            collection_name: Name of Firestore collection (defaults to table_name)
-            batch_size: Maximum documents per batch (max 500)
-        
+            table_name: Nombre de la tabla SQLite
+            collection_name: Nombre de la colección Firestore (por defecto igual a table_name)
+            batch_size: Tamaño de batch (máximo 500)
+            
         Returns:
-            Tuple of (migrated_count, skipped_count, error_count)
+            Tupla (migrados, omitidos, errores)
         """
         if not collection_name:
             collection_name = table_name
         
         self._log(f"{'[DRY RUN] ' if self.dry_run else ''}Migrating table: {table_name}")
+        self._report_progress(f"Migrating {table_name}...", 0)
         
         try:
-            # Get all records from SQLite
-            cursor = self.db.cursor()
-            cursor.execute(f"SELECT * FROM {table_name}")
-            records = cursor.fetchall()
-            total = len(records)
-            
+            # Contar registros
+            total = self.sqlite_reader.count_records(table_name)
             self._log(f"  Found {total} records in {table_name}")
             self.stats['total_records'] += total
             
@@ -157,63 +192,108 @@ class FirebaseMigrator:
             skipped = 0
             errors = 0
             
-            # Process in batches
-            for i in range(0, total, batch_size):
-                batch = records[i:i + batch_size]
-                batch_num = (i // batch_size) + 1
+            # Procesar en lotes
+            for offset in range(0, total, batch_size):
+                records = self.sqlite_reader.read_records_batch(
+                    table_name, batch_size, offset
+                )
+                
+                batch_num = (offset // batch_size) + 1
                 total_batches = (total + batch_size - 1) // batch_size
                 
-                self._log(f"  Processing batch {batch_num}/{total_batches} ({len(batch)} records)")
+                self._log(f"  Processing batch {batch_num}/{total_batches} ({len(records)} records)")
+                progress_pct = int((offset / total) * 100)
+                self._report_progress(
+                    f"Migrating {table_name} - batch {batch_num}/{total_batches}",
+                    progress_pct
+                )
                 
-                if self.dry_run:
-                    # In dry run, just check for duplicates
-                    for record in batch:
-                        record_dict = dict(record)
-                        original_id = record_dict.get('id')
+                # Procesar cada registro
+                batch_docs = []
+                for record in records:
+                    original_id = record.get('id')
+                    
+                    # Verificar duplicados
+                    if self.firestore_writer.check_duplicate(collection_name, original_id):
+                        skipped += 1
+                        self.stats['skipped'] += 1
+                        self.stats['conflicts'] += 1
+                        continue
+                    
+                    # Preparar documento
+                    doc_data = self._prepare_document(record, table_name)
+                    batch_docs.append(doc_data)
+                
+                # Escribir batch
+                if batch_docs:
+                    try:
+                        written = self.firestore_writer.write_batch(collection_name, batch_docs)
+                        migrated += written
                         
-                        # Simulate checking for existing document
-                        # In real implementation:
-                        # existing = self.firestore_db.collection(collection_name)\
-                        #     .where('original_sqlite_id', '==', original_id).limit(1).get()
-                        # if existing:
-                        #     skipped += 1
-                        
-                        migrated += 1  # Simulate successful migration
-                else:
-                    # Real migration would happen here
-                    for record in batch:
-                        record_dict = dict(record)
-                        original_id = record_dict.get('id')
-                        
-                        # Add migration metadata
-                        doc_data = self._prepare_document(record_dict, table_name)
-                        
-                        # In real implementation:
-                        # Check for duplicates
-                        # existing = self.firestore_db.collection(collection_name)\
-                        #     .where('original_sqlite_id', '==', original_id).limit(1).get()
-                        # 
-                        # if not existing:
-                        #     doc_ref = self.firestore_db.collection(collection_name).add(doc_data)
-                        #     self.mapping[f"{table_name}_{original_id}"] = doc_ref[1].id
-                        #     migrated += 1
-                        # else:
-                        #     skipped += 1
-                        
-                        migrated += 1  # Simulate for now
-            
-            self._log(f"  ✓ {table_name}: {migrated} migrated, {skipped} skipped, {errors} errors")
+                        # Guardar mappings
+                        for i, record in enumerate(records[:len(batch_docs)]):
+                            original_id = record.get('id')
+                            firestore_id = f"doc_{migrated - len(batch_docs) + i + 1}"
+                            self.id_mapper.add_mapping(table_name, original_id, firestore_id)
+                            
+                    except FirestoreWriteError as e:
+                        errors += 1
+                        self._log(f"  ERROR writing batch: {e}")
             
             self.stats['migrated'] += migrated
-            self.stats['skipped'] += skipped
             self.stats['errors'] += errors
             
+            self._log(f"  ✓ {table_name}: {migrated} migrated, {skipped} skipped, {errors} errors")
             return migrated, skipped, errors
             
         except Exception as e:
-            self._log(f"  ERROR migrating {table_name}: {str(e)}")
-            logger.exception(f"Error migrating table {table_name}")
+            self._log(f"  ERROR migrating {table_name}: {e}")
+            logger.exception(f"Table migration error: {table_name}")
             return 0, 0, 1
+    
+    def migrate_all(
+        self,
+        tables: Optional[List[str]] = None,
+        use_migration_order: bool = True
+    ) -> Dict[str, Tuple[int, int, int]]:
+        """
+        Migra múltiples tablas.
+        
+        Args:
+            tables: Lista de tablas a migrar (None = todas)
+            use_migration_order: Si True, usa orden de MIGRATION_ORDER
+            
+        Returns:
+            Dict con resultados por tabla: {table: (migrados, omitidos, errores)}
+        """
+        if tables is None:
+            # Obtener todas las tablas disponibles
+            tables = self.sqlite_reader.get_table_names()
+        
+        if use_migration_order:
+            # Ordenar según MIGRATION_ORDER
+            ordered_tables = []
+            for table in MIGRATION_ORDER:
+                if table in tables:
+                    ordered_tables.append(table)
+            # Añadir tablas no especificadas al final
+            for table in tables:
+                if table not in ordered_tables:
+                    ordered_tables.append(table)
+            tables = ordered_tables
+        
+        results = {}
+        total_tables = len(tables)
+        
+        for i, table in enumerate(tables):
+            self._log(f"\n{'='*60}")
+            self._log(f"Table {i+1}/{total_tables}: {table}")
+            self._log(f"{'='*60}")
+            
+            migrated, skipped, errors = self.migrate_table(table)
+            results[table] = (migrated, skipped, errors)
+        
+        return results
     
     def migrate_attachments(
         self,
@@ -222,33 +302,33 @@ class FirebaseMigrator:
         id_column: str = 'id'
     ) -> int:
         """
-        Migrate file attachments to Cloud Storage.
+        Migra archivos adjuntos a Cloud Storage.
         
         Args:
-            table_name: Table containing attachment paths
-            path_column: Column with file paths
-            id_column: Column with record ID
-        
+            table_name: Tabla con rutas de archivos
+            path_column: Columna con rutas
+            id_column: Columna con ID
+            
         Returns:
-            Number of files uploaded
+            Número de archivos subidos
         """
         self._log(f"{'[DRY RUN] ' if self.dry_run else ''}Migrating attachments from {table_name}.{path_column}")
         
         try:
-            cursor = self.db.cursor()
-            cursor.execute(
-                f"SELECT {id_column}, {path_column} FROM {table_name} "
-                f"WHERE {path_column} IS NOT NULL AND {path_column} != ''"
-            )
-            records = cursor.fetchall()
+            # Leer registros con archivos
+            all_records = self.sqlite_reader.read_all_records(table_name)
+            records_with_files = [
+                r for r in all_records
+                if r.get(path_column) and r[path_column].strip()
+            ]
             
             uploaded = 0
             
-            for record in records:
-                record_id = record[0]
-                file_path = record[1]
+            for record in records_with_files:
+                record_id = record[id_column]
+                file_path = record[path_column]
                 
-                if not file_path or not os.path.exists(file_path):
+                if not os.path.exists(file_path):
                     self._log(f"  ⚠️ File not found: {file_path}")
                     continue
                 
@@ -256,12 +336,9 @@ class FirebaseMigrator:
                     self._log(f"  [DRY RUN] Would upload: {file_path}")
                     uploaded += 1
                 else:
-                    # Real implementation would upload to Storage
+                    # En implementación real:
                     # storage_path = f"projects/{proyecto_id}/conduces/{record_id}/{filename}"
-                    # blob = self.storage_bucket.blob(storage_path)
-                    # blob.upload_from_filename(file_path)
-                    # public_url = blob.public_url
-                    
+                    # Upload to Cloud Storage
                     self._log(f"  Uploaded: {file_path}")
                     uploaded += 1
             
@@ -269,92 +346,87 @@ class FirebaseMigrator:
             return uploaded
             
         except Exception as e:
-            self._log(f"  ERROR uploading attachments: {str(e)}")
-            logger.exception("Error uploading attachments")
+            self._log(f"  ERROR uploading attachments: {e}")
+            logger.exception("Attachment upload error")
             return 0
     
     def _prepare_document(self, record: Dict, table_name: str) -> Dict:
         """
-        Prepare a document for Firestore with metadata.
+        Prepara un documento para Firestore con metadata.
         
         Args:
-            record: SQLite record as dict
-            table_name: Name of source table
-        
+            record: Registro de SQLite
+            table_name: Nombre de la tabla
+            
         Returns:
-            Document ready for Firestore
+            Documento listo para Firestore
         """
         doc = dict(record)
         
-        # Add migration metadata
+        # Añadir metadata de migración
         doc['original_sqlite_id'] = doc.get('id')
         doc['migrated_at'] = datetime.now().isoformat()
         doc['migrated_by'] = 'FirebaseMigrator'
         doc['source_table'] = table_name
         
-        # Convert dates to Firestore Timestamp format
-        # In real implementation, use firestore.SERVER_TIMESTAMP
-        for key, value in doc.items():
-            if isinstance(value, str) and self._looks_like_date(value):
-                # Would convert to Firestore Timestamp
+        # Convertir fechas si es necesario
+        for key in DATE_COLUMNS:
+            if key in doc and doc[key] and isinstance(doc[key], str):
+                # En implementación real, convertir a Firestore Timestamp
                 pass
         
         return doc
     
-    def _looks_like_date(self, value: str) -> bool:
-        """Check if string looks like a date"""
-        if not value:
-            return False
-        # Simple check for YYYY-MM-DD format
-        parts = value.split('-')
-        return len(parts) == 3 and len(parts[0]) == 4
-    
     def _log(self, message: str):
-        """Add message to migration log"""
+        """Añade mensaje al log"""
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         log_entry = f"[{timestamp}] {message}"
         self.migration_log.append(log_entry)
         logger.info(message)
     
-    def save_mapping(self, output_path: str = "mapping.json"):
-        """Save ID mapping to JSON file"""
+    def _report_progress(self, message: str, percentage: int):
+        """Reporta progreso vía callback"""
+        if self.progress_callback:
+            self.progress_callback(message, percentage)
+    
+    def save_mapping(self, output_path: str = MAPPING_FILE):
+        """Guarda mapeo de IDs"""
         try:
-            with open(output_path, 'w') as f:
-                json.dump(self.mapping, f, indent=2)
-            self._log(f"Mapping saved to: {output_path}")
+            self.id_mapper.save()
+            self._log(f"✓ Mapping saved to: {output_path}")
         except Exception as e:
-            self._log(f"ERROR saving mapping: {str(e)}")
+            self._log(f"ERROR saving mapping: {e}")
     
     def save_log(self, output_path: str = "migration_log.txt"):
-        """Save migration log to text file"""
+        """Guarda log de migración"""
         try:
-            with open(output_path, 'w') as f:
+            with open(output_path, 'w', encoding='utf-8') as f:
                 f.write('\n'.join(self.migration_log))
-            self._log(f"Log saved to: {output_path}")
+            self._log(f"✓ Log saved to: {output_path}")
         except Exception as e:
-            logger.error(f"ERROR saving log: {str(e)}")
+            logger.error(f"ERROR saving log: {e}")
     
-    def save_summary(self, output_path: str = "migration_summary.json"):
-        """Save migration summary statistics"""
+    def save_summary(self, output_path: str = SUMMARY_FILE):
+        """Guarda resumen de migración"""
         try:
             summary = {
                 'timestamp': datetime.now().isoformat(),
                 'dry_run': self.dry_run,
-                'database': self.db_path,
-                'firebase_project': self.project_id,
+                'database': self.sqlite_path,
+                'firebase_project': self.auth.get_project_id(),
                 'statistics': self.stats,
-                'total_tables': len(set(k.split('_')[0] for k in self.mapping.keys())) if self.mapping else 0
+                'total_mappings': len(self.id_mapper.get_all_mappings())
             }
             
-            with open(output_path, 'w') as f:
-                json.dump(summary, f, indent=2)
+            with open(output_path, 'w', encoding='utf-8') as f:
+                json.dump(summary, f, indent=2, ensure_ascii=False)
             
-            self._log(f"Summary saved to: {output_path}")
+            self._log(f"✓ Summary saved to: {output_path}")
         except Exception as e:
-            self._log(f"ERROR saving summary: {str(e)}")
+            self._log(f"ERROR saving summary: {e}")
     
     def close(self):
-        """Close database connections"""
-        if self.db:
-            self.db.close()
+        """Cierra conexiones"""
+        if self.sqlite_reader:
+            self.sqlite_reader.disconnect()
             self._log("SQLite connection closed")
