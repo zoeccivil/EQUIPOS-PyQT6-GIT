@@ -131,6 +131,10 @@ class AppGUI(QMainWindow):
 
         config_menu = menubar.addMenu("Configuración")
         config_menu.addAction("Seleccionar Carpeta CONDUCES", self.seleccionar_carpeta_conduces)
+        
+        # Firebase migration menu
+        herramientas_menu = menubar.addMenu("Herramientas")
+        herramientas_menu.addAction("Migrar a Firebase...", self._abrir_dialogo_migracion_firebase)
 
     def elegir_base_datos(self):
         archivo, _ = QFileDialog.getOpenFileName(
@@ -518,6 +522,26 @@ class AppGUI(QMainWindow):
     def _abrir_ventana_gestion_abonos(self):
         dialog = VentanaGestionAbonos(self.db, self.proyecto_actual)
         dialog.exec()
+    
+    def _abrir_dialogo_migracion_firebase(self):
+        """Open Firebase migration dialog"""
+        try:
+            from app.ui.dialogs import DialogoMigracionFirebase
+            dialog = DialogoMigracionFirebase(self.db, self)
+            dialog.exec()
+        except ImportError as e:
+            QMessageBox.warning(
+                self,
+                "Error",
+                f"No se pudo abrir el diálogo de migración:\n{str(e)}\n\n"
+                "Asegúrate de que el módulo app.ui.dialogs esté disponible."
+            )
+        except Exception as e:
+            QMessageBox.critical(
+                self,
+                "Error",
+                f"Error al abrir el diálogo de migración:\n{str(e)}"
+            )
 
     def _abrir_dialogo_filtros(self):
         dlg = FiltrosReporteDialog(self.db, self)
