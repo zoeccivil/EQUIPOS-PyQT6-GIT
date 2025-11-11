@@ -66,6 +66,9 @@ class AppGUI(QMainWindow):
 
         # 2. Crear el menú (usa self.reportes_tab)
         self._create_menu_bar()
+        
+        # 2.5. Crear status bar con indicador de fuente de datos
+        self._create_status_bar()
 
         # 3. Cargar configuración
         self.config = config_manager.cargar_configuracion()
@@ -131,10 +134,57 @@ class AppGUI(QMainWindow):
 
         config_menu = menubar.addMenu("Configuración")
         config_menu.addAction("Seleccionar Carpeta CONDUCES", self.seleccionar_carpeta_conduces)
+        config_menu.addSeparator()
+        config_menu.addAction("Fuente de Datos (SQLite/Firestore)...", self._abrir_configuracion_fuente_datos)
         
         # Firebase migration menu
         herramientas_menu = menubar.addMenu("Herramientas")
         herramientas_menu.addAction("Migrar a Firebase...", self._abrir_dialogo_migracion_firebase)
+
+    def _create_status_bar(self):
+        """Create status bar with data source indicator"""
+        from PyQt6.QtWidgets import QLabel
+        from app.app_settings import get_app_settings
+        
+        status_bar = self.statusBar()
+        
+        # Get current data source from settings
+        try:
+            settings = get_app_settings()
+            data_source = settings.get_data_source()
+            
+            if data_source == 'firestore':
+                project_id = settings.get_value('firestore.project_id', 'Unknown')
+                icon = "☁️"
+                text = f"{icon} Firestore: {project_id}"
+                color = "#FF8C00"  # Orange
+            else:
+                db_path = settings.get_value('sqlite.db_path', 'progain_database.db')
+                db_name = db_path.split('/')[-1] if '/' in db_path else db_path.split('\\')[-1] if '\\' in db_path else db_path
+                icon = "🗄️"
+                text = f"{icon} SQLite: {db_name}"
+                color = "#4A90E2"  # Blue
+            
+            # Create label with styled text
+            data_source_label = QLabel(text)
+            data_source_label.setStyleSheet(f"""
+                QLabel {{
+                    background-color: {color};
+                    color: white;
+                    padding: 4px 12px;
+                    border-radius: 3px;
+                    font-weight: bold;
+                }}
+            """)
+            
+            # Add to status bar
+            status_bar.addPermanentWidget(data_source_label)
+            self.data_source_label = data_source_label  # Save reference for updates
+            
+        except Exception as e:
+            print(f"[WARNING] Could not create data source indicator: {e}")
+            # Fallback to simple message
+            status_bar.showMessage("Gestor de Alquileres")
 
     def elegir_base_datos(self):
         archivo, _ = QFileDialog.getOpenFileName(
@@ -522,6 +572,42 @@ class AppGUI(QMainWindow):
     def _abrir_ventana_gestion_abonos(self):
         dialog = VentanaGestionAbonos(self.db, self.proyecto_actual)
         dialog.exec()
+    
+    def _abrir_configuracion_fuente_datos(self):
+        """Open data source configuration dialog"""
+        try:
+            from app.ui.data_source_widget import DataSourceWidget
+            from app.app_settings import get_app_settings
+            
+            settings = get_app_settings()
+            dialog = DataSourceWidget(settings, parent=self)
+            dialog.exec()
+            
+            # Check if restart is required
+            if dialog.restart_required:
+                reply = QMessageBox.question(
+                    self,
+                    "Reinicio Requerido",
+                    "La configuración de fuente de datos ha cambiado.\n"
+                    "Es necesario reiniciar la aplicación para aplicar los cambios.\n\n"
+                    "¿Desea cerrar la aplicación ahora?",
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+                )
+                if reply == QMessageBox.StandardButton.Yes:
+                    self.close()
+        except ImportError as e:
+            QMessageBox.warning(
+                self,
+                "Error",
+                f"No se pudo abrir la configuración de fuente de datos:\n{str(e)}\n\n"
+                "Asegúrate de que el módulo app.ui.data_source_widget esté disponible."
+            )
+        except Exception as e:
+            QMessageBox.critical(
+                self,
+                "Error",
+                f"Error al abrir la configuración de fuente de datos:\n{str(e)}"
+            )
     
     def _abrir_dialogo_migracion_firebase(self):
         """Open Firebase migration dialog"""
