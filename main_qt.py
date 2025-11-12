@@ -96,47 +96,114 @@ def main():
         except Exception as e:
             logger.exception("No se pudo guardar la configuración por defecto: %s", e)
 
-    db_path = config.get("database_path", "progain_database.db")
-
-    # Si la base de datos no existe, solicitarla con diálogo (mantener al usuario informado)
-    while not os.path.isfile(db_path):
-        QMessageBox.warning(None, "Base de datos no encontrada",
-                            f"No se encontró la base de datos:\n{db_path}\n\nPor favor, selecciona una base de datos SQLite.")
-        selected = solicitar_bd_por_dialogo()
-        if not selected:
-            QMessageBox.critical(None, "Sin base de datos", "No se seleccionó una base de datos. La aplicación se cerrará.")
-            logger.error("No se seleccionó una base de datos al iniciar. Saliendo.")
-            sys.exit(1)
-        db_path = selected
-        config["database_path"] = db_path
+    # Check data source configuration (AppSettings)
+    try:
+        from app.app_settings import get_app_settings
+        from app.repo.repository_factory import RepositoryFactory
+        
+        settings = get_app_settings()
+        data_source = settings.get_data_source()
+        
+        logger.info(f"Starting application with data source: {data_source}")
+        
+        if data_source == 'firestore':
+            # Use Firestore
+            try:
+                repo = RepositoryFactory.create_from_settings(settings)
+                # For backward compatibility, create a wrapper that acts like DatabaseManager
+                # but uses the repository internally
+                db_manager = repo.get_db_manager() if hasattr(repo, 'get_db_manager') else None
+                
+                if db_manager is None:
+                    # Firestore doesn't have get_db_manager, use SQLite as fallback for now
+                    # In a future update, we should refactor AppGUI to use repository directly
+                    logger.warning("Firestore selected but AppGUI still requires DatabaseManager. Falling back to SQLite.")
+                    db_path = config.get("database_path", "progain_database.db")
+                    db_manager = DatabaseManager(db_path)
+            except Exception as e:
+                logger.exception(f"Error initializing Firestore repository: {e}")
+                QMessageBox.warning(
+                    None,
+                    "Error Firestore",
+                    f"No se pudo conectar a Firestore:\n{e}\n\nUsando SQLite local como respaldo."
+                )
+                # Fallback to SQLite
+                db_path = config.get("database_path", "progain_database.db")
+                db_manager = DatabaseManager(db_path)
+        else:
+            # Use SQLite (default)
+            db_path = config.get("database_path", "progain_database.db")
+            
+            # Si la base de datos no existe, solicitarla con diálogo
+            while not os.path.isfile(db_path):
+                QMessageBox.warning(
+                    None, 
+                    "Base de datos no encontrada",
+                    f"No se encontró la base de datos:\n{db_path}\n\nPor favor, selecciona una base de datos SQLite."
+                )
+                selected = solicitar_bd_por_dialogo()
+                if not selected:
+                    QMessageBox.critical(None, "Sin base de datos", "No se seleccionó una base de datos. La aplicación se cerrará.")
+                    logger.error("No se seleccionó una base de datos al iniciar. Saliendo.")
+                    sys.exit(1)
+                db_path = selected
+                config["database_path"] = db_path
+                try:
+                    guardar_configuracion(config)
+                except Exception as e:
+                    logger.exception("No se pudo guardar la configuración actualizada: %s", e)
+            
+            # Inicializar el gestor de base de datos SQLite
+            try:
+                db_manager = DatabaseManager(db_path)
+            except Exception as e:
+                logger.exception("No se pudo inicializar DatabaseManager con %s: %s", db_path, e)
+                QMessageBox.critical(None, "Error BD", f"No se pudo abrir la base de datos:\n{db_path}\n\n{e}")
+                sys.exit(1)
+    
+    except ImportError:
+        # AppSettings not available, use legacy approach
+        logger.warning("AppSettings not available, using legacy SQLite initialization")
+        db_path = config.get("database_path", "progain_database.db")
+        
+        while not os.path.isfile(db_path):
+            QMessageBox.warning(None, "Base de datos no encontrada",
+                                f"No se encontró la base de datos:\n{db_path}\n\nPor favor, selecciona una base de datos SQLite.")
+            selected = solicitar_bd_por_dialogo()
+            if not selected:
+                QMessageBox.critical(None, "Sin base de datos", "No se seleccionó una base de datos. La aplicación se cerrará.")
+                logger.error("No se seleccionó una base de datos al iniciar. Saliendo.")
+                sys.exit(1)
+            db_path = selected
+            config["database_path"] = db_path
+            try:
+                guardar_configuracion(config)
+            except Exception as e:
+                logger.exception("No se pudo guardar la configuración actualizada: %s", e)
+        
         try:
-            guardar_configuracion(config)
+            db_manager = DatabaseManager(db_path)
         except Exception as e:
-            logger.exception("No se pudo guardar la configuración actualizada: %s", e)
+            logger.exception("No se pudo inicializar DatabaseManager con %s: %s", db_path, e)
+            QMessageBox.critical(None, "Error BD", f"No se pudo abrir la base de datos:\n{db_path}\n\n{e}")
+            sys.exit(1)
 
-    # Inicializar el gestor de base de datos
-    try:
-        db_manager = DatabaseManager(db_path)
-    except Exception as e:
-        logger.exception("No se pudo inicializar DatabaseManager con %s: %s", db_path, e)
-        QMessageBox.critical(None, "Error BD", f"No se pudo abrir la base de datos:\n{db_path}\n\n{e}")
-        sys.exit(1)
-
-    # Asegurar las tablas necesarias (migraciones mínimas)
-    try:
-        db_manager.crear_tablas_nucleo()
-        db_manager.sembrar_datos_iniciales()
-        db_manager.crear_tabla_equipos()
-        db_manager.asegurar_tabla_alquiler_meta()
-        db_manager.asegurar_tabla_pagos()
-        db_manager.asegurar_tabla_mantenimientos()
-        db_manager.asegurar_tablas_mantenimiento()
-        db_manager.crear_indices()
-        db_manager.asegurar_tabla_equipos_entidades()  # <-- AÑADE ESTA LÍNEA
-    except Exception as e:
-        logger.exception("Error creando/asegurando tablas: %s", e)
-        QMessageBox.critical(None, "Error BD", f"No se pudo preparar la base de datos:\n{e}")
-        sys.exit(1)
+    # Asegurar las tablas necesarias (migraciones mínimas) - only for SQLite
+    if isinstance(db_manager, DatabaseManager):
+        try:
+            db_manager.crear_tablas_nucleo()
+            db_manager.sembrar_datos_iniciales()
+            db_manager.crear_tabla_equipos()
+            db_manager.asegurar_tabla_alquiler_meta()
+            db_manager.asegurar_tabla_pagos()
+            db_manager.asegurar_tabla_mantenimientos()
+            db_manager.asegurar_tablas_mantenimiento()
+            db_manager.crear_indices()
+            db_manager.asegurar_tabla_equipos_entidades()  # <-- AÑADE ESTA LÍNEA
+        except Exception as e:
+            logger.exception("Error creando/asegurando tablas: %s", e)
+            QMessageBox.critical(None, "Error BD", f"No se pudo preparar la base de datos:\n{e}")
+            sys.exit(1)
 
     # Iniciar la ventana principal
     try:

@@ -1,7 +1,7 @@
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QTabWidget, QFileDialog, QMessageBox, QMenuBar, QMenu
 )
-from PyQt6.QtGui import QAction
+from PyQt6.QtGui import QAction, QActionGroup
 from PyQt6.QtCore import QTimer
 import shutil
 from datetime import datetime
@@ -66,6 +66,12 @@ class AppGUI(QMainWindow):
 
         # 2. Crear el menú (usa self.reportes_tab)
         self._create_menu_bar()
+        
+        # 2.5. Crear status bar con indicador de fuente de datos
+        self._create_status_bar()
+        
+        # 2.6. Aplicar tema desde configuración
+        self._apply_saved_theme()
 
         # 3. Cargar configuración
         self.config = config_manager.cargar_configuracion()
@@ -131,6 +137,67 @@ class AppGUI(QMainWindow):
 
         config_menu = menubar.addMenu("Configuración")
         config_menu.addAction("Seleccionar Carpeta CONDUCES", self.seleccionar_carpeta_conduces)
+        config_menu.addSeparator()
+        config_menu.addAction("Fuente de Datos (SQLite/Firestore)...", self._abrir_configuracion_fuente_datos)
+        config_menu.addSeparator()
+        
+        # Theme submenu
+        self.menu_tema = config_menu.addMenu("Tema")
+        self._create_theme_menu()
+        
+        # Apariencia menu (alternative location)
+        apariencia_menu = menubar.addMenu("Apariencia")
+        self.menu_tema_apariencia = apariencia_menu.addMenu("Tema")
+        self._create_theme_menu_apariencia()
+        
+        # Firebase migration menu
+        herramientas_menu = menubar.addMenu("Herramientas")
+        herramientas_menu.addAction("Migrar a Firebase...", self._abrir_dialogo_migracion_firebase)
+
+    def _create_status_bar(self):
+        """Create status bar with data source indicator"""
+        from PyQt6.QtWidgets import QLabel
+        from app.app_settings import get_app_settings
+        
+        status_bar = self.statusBar()
+        
+        # Get current data source from settings
+        try:
+            settings = get_app_settings()
+            data_source = settings.get_data_source()
+            
+            if data_source == 'firestore':
+                project_id = settings.get_value('firestore.project_id', 'Unknown')
+                icon = "☁️"
+                text = f"{icon} Firestore: {project_id}"
+                color = "#FF8C00"  # Orange
+            else:
+                db_path = settings.get_value('sqlite.db_path', 'progain_database.db')
+                db_name = db_path.split('/')[-1] if '/' in db_path else db_path.split('\\')[-1] if '\\' in db_path else db_path
+                icon = "🗄️"
+                text = f"{icon} SQLite: {db_name}"
+                color = "#4A90E2"  # Blue
+            
+            # Create label with styled text
+            data_source_label = QLabel(text)
+            data_source_label.setStyleSheet(f"""
+                QLabel {{
+                    background-color: {color};
+                    color: white;
+                    padding: 4px 12px;
+                    border-radius: 3px;
+                    font-weight: bold;
+                }}
+            """)
+            
+            # Add to status bar
+            status_bar.addPermanentWidget(data_source_label)
+            self.data_source_label = data_source_label  # Save reference for updates
+            
+        except Exception as e:
+            print(f"[WARNING] Could not create data source indicator: {e}")
+            # Fallback to simple message
+            status_bar.showMessage("Gestor de Alquileres")
 
     def elegir_base_datos(self):
         archivo, _ = QFileDialog.getOpenFileName(
@@ -518,6 +585,62 @@ class AppGUI(QMainWindow):
     def _abrir_ventana_gestion_abonos(self):
         dialog = VentanaGestionAbonos(self.db, self.proyecto_actual)
         dialog.exec()
+    
+    def _abrir_configuracion_fuente_datos(self):
+        """Open data source configuration dialog"""
+        try:
+            from app.ui.data_source_widget import DataSourceWidget
+            from app.app_settings import get_app_settings
+            
+            settings = get_app_settings()
+            dialog = DataSourceWidget(settings, parent=self)
+            dialog.exec()
+            
+            # Check if restart is required
+            if dialog.restart_required:
+                reply = QMessageBox.question(
+                    self,
+                    "Reinicio Requerido",
+                    "La configuración de fuente de datos ha cambiado.\n"
+                    "Es necesario reiniciar la aplicación para aplicar los cambios.\n\n"
+                    "¿Desea cerrar la aplicación ahora?",
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+                )
+                if reply == QMessageBox.StandardButton.Yes:
+                    self.close()
+        except ImportError as e:
+            QMessageBox.warning(
+                self,
+                "Error",
+                f"No se pudo abrir la configuración de fuente de datos:\n{str(e)}\n\n"
+                "Asegúrate de que el módulo app.ui.data_source_widget esté disponible."
+            )
+        except Exception as e:
+            QMessageBox.critical(
+                self,
+                "Error",
+                f"Error al abrir la configuración de fuente de datos:\n{str(e)}"
+            )
+    
+    def _abrir_dialogo_migracion_firebase(self):
+        """Open Firebase migration dialog"""
+        try:
+            from app.ui.dialogs import DialogoMigracionFirebase
+            dialog = DialogoMigracionFirebase(self.db, self)
+            dialog.exec()
+        except ImportError as e:
+            QMessageBox.warning(
+                self,
+                "Error",
+                f"No se pudo abrir el diálogo de migración:\n{str(e)}\n\n"
+                "Asegúrate de que el módulo app.ui.dialogs esté disponible."
+            )
+        except Exception as e:
+            QMessageBox.critical(
+                self,
+                "Error",
+                f"Error al abrir el diálogo de migración:\n{str(e)}"
+            )
 
     def _abrir_dialogo_filtros(self):
         dlg = FiltrosReporteDialog(self.db, self)
@@ -526,6 +649,96 @@ class AppGUI(QMainWindow):
             # Ahora puedes usar 'filtros' para tu función de reporte
             print(filtros)
             # Ejemplo: self.generar_reporte_detallado_excel(filtros)
+    
+    def _apply_saved_theme(self):
+        """Apply theme from settings on startup"""
+        try:
+            from app.ui.themes.theme_manager import apply_theme_from_settings
+            apply_theme_from_settings(QApplication.instance())
+        except Exception as e:
+            print(f"Could not apply theme: {e}")
+    
+    def _create_theme_menu(self):
+        """Create theme submenu in Configuración menu"""
+        try:
+            from app.ui.themes.theme_manager import list_themes, get_current_theme
+            
+            themes = list_themes()
+            theme_group = QActionGroup(self)
+            theme_group.setExclusive(True)
+            
+            current = get_current_theme()
+            
+            for theme_info in themes:
+                action = QAction(theme_info['name'], self)
+                action.setCheckable(True)
+                action.setData(theme_info['id'])
+                
+                if current == theme_info['id']:
+                    action.setChecked(True)
+                
+                action.triggered.connect(
+                    lambda checked, tid=theme_info['id']: self._cambiar_tema(tid)
+                )
+                
+                theme_group.addAction(action)
+                self.menu_tema.addAction(action)
+                
+        except Exception as e:
+            print(f"Could not create theme menu: {e}")
+    
+    def _create_theme_menu_apariencia(self):
+        """Create theme submenu in Apariencia menu"""
+        try:
+            from app.ui.themes.theme_manager import list_themes, get_current_theme
+            
+            themes = list_themes()
+            theme_group = QActionGroup(self)
+            theme_group.setExclusive(True)
+            
+            current = get_current_theme()
+            
+            for theme_info in themes:
+                action = QAction(theme_info['name'], self)
+                action.setCheckable(True)
+                action.setData(theme_info['id'])
+                
+                if current == theme_info['id']:
+                    action.setChecked(True)
+                
+                action.triggered.connect(
+                    lambda checked, tid=theme_info['id']: self._cambiar_tema(tid)
+                )
+                
+                theme_group.addAction(action)
+                self.menu_tema_apariencia.addAction(action)
+                
+        except Exception as e:
+            print(f"Could not create theme menu: {e}")
+    
+    def _cambiar_tema(self, theme_id):
+        """Apply selected theme and save to settings"""
+        try:
+            from app.ui.themes.theme_manager import apply_theme
+            from app.app_settings import get_app_settings
+            
+            # Apply theme
+            apply_theme(QApplication.instance(), theme_id)
+            
+            # Save to settings
+            settings = get_app_settings()
+            settings.set_value('theme', theme_id)
+            settings.save()
+            
+            print(f"Theme changed to: {theme_id}")
+            
+        except Exception as e:
+            print(f"Could not change theme: {e}")
+            QMessageBox.warning(
+                self,
+                "Error de Tema",
+                f"No se pudo aplicar el tema:\n{str(e)}"
+            )
 
 
 
