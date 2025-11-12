@@ -167,6 +167,15 @@ class AppSettings:
         """Reset all settings to defaults"""
         self.settings = self.DEFAULT_SETTINGS.copy()
         self.save()
+    
+    # Alias methods for compatibility with theme manager and other components
+    def get_value(self, key: str, default=None):
+        """Alias for get() method for backward compatibility"""
+        return self.get(key, default)
+    
+    def set_value(self, key: str, value, save: bool = True):
+        """Alias for set() method for backward compatibility"""
+        self.set(key, value, save)
 
 
 # Global settings instance
