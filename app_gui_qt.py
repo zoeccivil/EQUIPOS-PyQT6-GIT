@@ -1,7 +1,7 @@
 from PyQt6.QtWidgets import (
-    QApplication, QMainWindow, QTabWidget, QFileDialog, QMessageBox, QMenuBar, QMenu, QActionGroup
+    QApplication, QMainWindow, QTabWidget, QFileDialog, QMessageBox, QMenuBar, QMenu
 )
-from PyQt6.QtGui import QAction
+from PyQt6.QtGui import QAction, QActionGroup
 from PyQt6.QtCore import QTimer
 import shutil
 from datetime import datetime
