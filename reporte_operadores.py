@@ -53,6 +53,10 @@ class ReporteOperadores:
         # Pagos
         if pagos_data:
             df_pagos = pd.DataFrame([dict(row) for row in pagos_data])
+            # The query returns 'operador' and 'equipo', rename them to match ingresos
+            df_pagos = df_pagos.rename(columns={'operador': 'operador_nombre', 'equipo': 'equipo_nombre'})
+            df_pagos['operador_nombre'] = df_pagos['operador_nombre'].fillna('No Especificado')
+            df_pagos['equipo_nombre'] = df_pagos['equipo_nombre'].fillna('No Especificado')
             resumen_pagos = df_pagos.groupby(['operador_nombre', 'equipo_nombre']).agg(
                 total_pagado=('monto', 'sum')
             ).reset_index()
@@ -131,6 +135,10 @@ class ReporteOperadores:
         ).reset_index()
         if pagos_data:
             df_pagos = pd.DataFrame([dict(row) for row in pagos_data])
+            # The query returns 'operador' and 'equipo', rename them to match ingresos
+            df_pagos = df_pagos.rename(columns={'operador': 'operador_nombre', 'equipo': 'equipo_nombre'})
+            df_pagos['operador_nombre'] = df_pagos['operador_nombre'].fillna('No Especificado')
+            df_pagos['equipo_nombre'] = df_pagos['equipo_nombre'].fillna('No Especificado')
             resumen_pagos = df_pagos.groupby(['operador_nombre','equipo_nombre']).agg(
                 total_pagado=('monto','sum')
             ).reset_index()
