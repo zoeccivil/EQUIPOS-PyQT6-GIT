@@ -187,7 +187,11 @@ class SQLiteRepository(BaseRepository):
     # --- MANTENIMIENTOS ---
     def obtener_mantenimientos(self, equipo_id: Optional[int] = None) -> List[Dict[str, Any]]:
         """Obtener mantenimientos, opcionalmente filtrados por equipo."""
-        return self.db.obtener_mantenimientos(equipo_id=equipo_id)
+        if equipo_id is not None:
+            return self.db.obtener_mantenimientos_por_equipo(equipo_id)
+        else:
+            # Get all mantenimientos from the table directly
+            return self.db.fetchall("SELECT * FROM mantenimientos")
     
     def crear_mantenimiento(self, datos: Dict[str, Any]) -> int:
         """Crear un nuevo registro de mantenimiento."""
