@@ -220,18 +220,25 @@ def main():
             
             # Also create legacy DatabaseManager for backward compatibility
             db_manager = DatabaseManager(db_path)
-            try:
-                db_manager.crear_tablas_nucleo()
-                db_manager.sembrar_datos_iniciales()
-                db_manager.crear_tabla_equipos()
-                db_manager.asegurar_tabla_alquiler_meta()
-                db_manager.asegurar_tabla_pagos()
-                db_manager.asegurar_tabla_mantenimientos()
-                db_manager.asegurar_tablas_mantenimiento()
-                db_manager.crear_indices()
-                db_manager.asegurar_tabla_equipos_entidades()
-            except Exception as e:
-                logger.warning(f"Error inicializando algunas tablas SQLite: {e}")
+            
+            # Initialize all tables - wrapped individually to avoid crashes
+            def _init_table_safe(func, name):
+                """Initialize a table safely without crashing."""
+                try:
+                    func()
+                    logger.info(f"✓ Tabla inicializada: {name}")
+                except Exception as e:
+                    logger.warning(f"✗ Error inicializando tabla {name}: {e}")
+            
+            _init_table_safe(db_manager.crear_tablas_nucleo, "tablas nucleo")
+            _init_table_safe(db_manager.sembrar_datos_iniciales, "datos iniciales")
+            _init_table_safe(db_manager.crear_tabla_equipos, "equipos")
+            _init_table_safe(db_manager.asegurar_tabla_alquiler_meta, "alquiler_meta")
+            _init_table_safe(db_manager.asegurar_tabla_pagos, "pagos")
+            _init_table_safe(db_manager.asegurar_tabla_mantenimientos, "mantenimientos")
+            _init_table_safe(db_manager.asegurar_tablas_mantenimiento, "mantenimiento")
+            _init_table_safe(db_manager.crear_indices, "indices")
+            _init_table_safe(db_manager.asegurar_tabla_equipos_entidades, "equipos_entidades")
             
             logger.info(f"SQLite inicializado exitosamente en: {db_path}")
             
@@ -270,18 +277,25 @@ def main():
         # Tabs will eventually be updated to use repository instead
         logger.info("Creando DatabaseManager temporal para compatibilidad con tabs...")
         db_manager = DatabaseManager(":memory:")
-        try:
-            db_manager.crear_tablas_nucleo()
-            db_manager.sembrar_datos_iniciales()
-            db_manager.crear_tabla_equipos()
-            db_manager.asegurar_tabla_alquiler_meta()
-            db_manager.asegurar_tabla_pagos()
-            db_manager.asegurar_tabla_mantenimientos()
-            db_manager.asegurar_tablas_mantenimiento()
-            db_manager.crear_indices()
-            db_manager.asegurar_tabla_equipos_entidades()
-        except Exception as e:
-            logger.warning(f"Error creando DatabaseManager temporal: {e}")
+        
+        # Initialize all tables - wrapped individually to avoid crashes
+        def _init_table_safe(func, name):
+            """Initialize a table safely without crashing."""
+            try:
+                func()
+                logger.info(f"✓ Tabla temporal inicializada: {name}")
+            except Exception as e:
+                logger.warning(f"✗ Error inicializando tabla temporal {name}: {e}")
+        
+        _init_table_safe(db_manager.crear_tablas_nucleo, "tablas nucleo")
+        _init_table_safe(db_manager.sembrar_datos_iniciales, "datos iniciales")
+        _init_table_safe(db_manager.crear_tabla_equipos, "equipos")
+        _init_table_safe(db_manager.asegurar_tabla_alquiler_meta, "alquiler_meta")
+        _init_table_safe(db_manager.asegurar_tabla_pagos, "pagos")
+        _init_table_safe(db_manager.asegurar_tabla_mantenimientos, "mantenimientos")
+        _init_table_safe(db_manager.asegurar_tablas_mantenimiento, "mantenimiento")
+        _init_table_safe(db_manager.crear_indices, "indices")
+        _init_table_safe(db_manager.asegurar_tabla_equipos_entidades, "equipos_entidades")
 
     # Start the main window
     try:

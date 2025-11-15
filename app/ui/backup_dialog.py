@@ -96,7 +96,7 @@ class DialogoBackupSQLite(QDialog):
     def __init__(self, parent=None, settings: AppSettings = None):
         super().__init__(parent)
         self.settings = settings or get_settings()
-        self.setWindowTitle("Crear Backup SQLite desde Firestore")
+        self.setWindowTitle("Migrar desde Firestore a SQLite")
         self.setModal(True)
         self.resize(600, 500)
         
@@ -113,16 +113,19 @@ class DialogoBackupSQLite(QDialog):
         
         # Info label
         info_label = QLabel(
-            "<b>Backup de Datos: Firestore → SQLite</b><br><br>"
-            "Esta herramienta creará un archivo de backup SQLite con todos los datos de Firestore.<br>"
-            "El backup es útil para análisis offline o como respaldo de seguridad.<br><br>"
-            "<b>Nota:</b> El backup NO afectará los datos en Firestore."
+            "<b>Migración/Backup de Datos: Firestore → SQLite</b><br><br>"
+            "Esta herramienta migrará todos los datos desde Firestore a un archivo SQLite.<br>"
+            "Útil para:<br>"
+            "• Backup de seguridad de todos tus datos<br>"
+            "• Análisis offline de datos<br>"
+            "• Migrar de regreso a SQLite si lo necesitas<br><br>"
+            "<b>Nota:</b> Esta operación NO afectará los datos en Firestore (sólo lectura)."
         )
         info_label.setWordWrap(True)
         layout.addWidget(info_label)
         
         # Backup location configuration
-        location_group = QGroupBox("Ubicación del Backup")
+        location_group = QGroupBox("Ubicación del Archivo SQLite")
         location_layout = QFormLayout()
         
         folder_selection_layout = QHBoxLayout()
@@ -142,7 +145,7 @@ class DialogoBackupSQLite(QDialog):
         layout.addWidget(location_group)
         
         # Progress section
-        progress_group = QGroupBox("Progreso del Backup")
+        progress_group = QGroupBox("Progreso de la Migración")
         progress_layout = QVBoxLayout()
         
         self.progress_bar = QProgressBar()
@@ -150,7 +153,7 @@ class DialogoBackupSQLite(QDialog):
         self.progress_bar.setValue(0)
         progress_layout.addWidget(self.progress_bar)
         
-        self.status_label = QLabel("Listo para crear backup")
+        self.status_label = QLabel("Listo para migrar")
         self.status_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         progress_layout.addWidget(self.status_label)
         
@@ -168,7 +171,7 @@ class DialogoBackupSQLite(QDialog):
         btn_layout = QHBoxLayout()
         btn_layout.addStretch()
         
-        self.backup_btn = QPushButton("Crear Backup")
+        self.backup_btn = QPushButton("Iniciar Migración")
         self.backup_btn.clicked.connect(self._start_backup)
         self.backup_btn.setEnabled(False)
         btn_layout.addWidget(self.backup_btn)
