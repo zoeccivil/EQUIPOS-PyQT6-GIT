@@ -40,10 +40,12 @@ from TabGastosEquipos import TabGastosEquipos
 from TabPagosOperadores import TabPagosOperadores
 
 class AppGUI(QMainWindow):
-    def __init__(self, db_manager, config):
+    def __init__(self, db_manager, config, repository=None, settings=None):
         super().__init__()
         self.db = db_manager
         self.config = config
+        self.repository = repository  # New: Repository for Firestore/SQLite abstraction
+        self.settings = settings  # New: AppSettings instance
         print(f"[DEBUG] AppGUI recibe config: {self.config}")
         self.report_generator = ReportGenerator()
         self.proyecto_actual = None
@@ -129,8 +131,19 @@ class AppGUI(QMainWindow):
         gestion_menu.addSeparator()
         gestion_menu.addAction("Gestionar Abonos", self._abrir_ventana_gestion_abonos)
 
+        # New: Herramientas menu for Firestore operations
+        herramientas_menu = menubar.addMenu("Herramientas")
+        herramientas_menu.addAction("Migrar desde SQLite a Firestore...", self._abrir_dialogo_migracion)
+        herramientas_menu.addAction("Crear Backup SQLite desde Firestore...", self._abrir_dialogo_backup)
+        herramientas_menu.addSeparator()
+        herramientas_menu.addAction("Verificar Conexión Firestore", self._verificar_conexion_firestore)
+
         config_menu = menubar.addMenu("Configuración")
         config_menu.addAction("Seleccionar Carpeta CONDUCES", self.seleccionar_carpeta_conduces)
+        config_menu.addSeparator()
+        # New: Data source configuration
+        config_menu.addAction("Configurar Fuente de Datos (Firestore/SQLite)...", self._configurar_fuente_datos)
+        config_menu.addAction("Configurar Carpeta de Backups...", self._configurar_carpeta_backups)
 
     def elegir_base_datos(self):
         archivo, _ = QFileDialog.getOpenFileName(
@@ -526,6 +539,125 @@ class AppGUI(QMainWindow):
             # Ahora puedes usar 'filtros' para tu función de reporte
             print(filtros)
             # Ejemplo: self.generar_reporte_detallado_excel(filtros)
+
+    # === New Firestore-related menu handlers ===
+    
+    def _abrir_dialogo_migracion(self):
+        """Open migration dialog for SQLite to Firestore."""
+        if self.settings is None:
+            QMessageBox.warning(
+                self,
+                "No disponible",
+                "La configuración de aplicación no está disponible."
+            )
+            return
+        
+        from app.ui.migration_dialog import DialogoMigracionFirestore
+        dialog = DialogoMigracionFirestore(self, self.settings)
+        dialog.exec()
+    
+    def _abrir_dialogo_backup(self):
+        """Open backup dialog for Firestore to SQLite."""
+        if self.settings is None:
+            QMessageBox.warning(
+                self,
+                "No disponible",
+                "La configuración de aplicación no está disponible."
+            )
+            return
+        
+        from app.ui.backup_dialog import DialogoBackupSQLite
+        dialog = DialogoBackupSQLite(self, self.settings)
+        dialog.exec()
+    
+    def _verificar_conexion_firestore(self):
+        """Verify Firestore connection status."""
+        if self.settings is None or not self.settings.is_firestore_configured():
+            QMessageBox.warning(
+                self,
+                "Firestore no configurado",
+                "Firestore no está configurado. Ve a:\n"
+                "Configuración > Configurar Fuente de Datos"
+            )
+            return
+        
+        try:
+            from app.repo.repository_factory import RepositoryFactory
+            repo = RepositoryFactory.create_firestore(self.settings)
+            
+            if repo.verificar_conexion():
+                QMessageBox.information(
+                    self,
+                    "Conexión exitosa",
+                    "La conexión a Firestore está activa y funcionando correctamente."
+                )
+            else:
+                QMessageBox.warning(
+                    self,
+                    "Conexión fallida",
+                    "No se pudo verificar la conexión a Firestore."
+                )
+            
+            repo.cerrar()
+            
+        except Exception as e:
+            QMessageBox.critical(
+                self,
+                "Error de conexión",
+                f"Error al conectar a Firestore:\n\n{str(e)}"
+            )
+    
+    def _configurar_fuente_datos(self):
+        """Open data source configuration dialog."""
+        if self.settings is None:
+            QMessageBox.warning(
+                self,
+                "No disponible",
+                "La configuración de aplicación no está disponible."
+            )
+            return
+        
+        from app.ui.data_source_widget import DataSourceWidget
+        dialog = DataSourceWidget(self, self.settings)
+        if dialog.exec():
+            QMessageBox.information(
+                self,
+                "Reinicio requerido",
+                "Los cambios en la fuente de datos requieren reiniciar la aplicación.\n\n"
+                "Por favor, cierra y abre la aplicación nuevamente."
+            )
+    
+    def _configurar_carpeta_backups(self):
+        """Configure backup folder location."""
+        if self.settings is None:
+            QMessageBox.warning(
+                self,
+                "No disponible",
+                "La configuración de aplicación no está disponible."
+            )
+            return
+        
+        carpeta_actual = self.settings.get_backup_folder()
+        nueva_carpeta = QFileDialog.getExistingDirectory(
+            self,
+            "Seleccionar Carpeta para Backups SQLite",
+            carpeta_actual or ""
+        )
+        
+        if nueva_carpeta:
+            self.settings.set_backup_folder(nueva_carpeta)
+            if self.settings.save():
+                QMessageBox.information(
+                    self,
+                    "Carpeta configurada",
+                    f"Carpeta de backups establecida en:\n{nueva_carpeta}"
+                )
+            else:
+                QMessageBox.critical(
+                    self,
+                    "Error",
+                    "No se pudo guardar la configuración."
+                )
 
 
 
