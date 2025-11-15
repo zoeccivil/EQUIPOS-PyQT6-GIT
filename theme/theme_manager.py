@@ -11,11 +11,32 @@ from typing import Callable, List, Optional, Dict, Tuple
 
 from PyQt6.QtWidgets import QApplication
 
-# Persistencia en JSON
-from app.core.app_settings import get_value, set_value
+# Persistencia en JSON - try both import paths
+try:
+    from app.core.app_settings import get_value, set_value
+except ImportError:
+    try:
+        from app.app_settings import get_settings
+        # Create compatibility wrappers
+        def get_value(key: str, default: str = "") -> str:
+            settings = get_settings()
+            return settings.get(key, default)
+        
+        def set_value(key: str, value: str) -> None:
+            settings = get_settings()
+            settings[key] = value
+            settings.save()
+    except ImportError:
+        # Fallback to simple in-memory storage
+        _theme_storage = {}
+        def get_value(key: str, default: str = "") -> str:
+            return _theme_storage.get(key, default)
+        
+        def set_value(key: str, value: str) -> None:
+            _theme_storage[key] = value
 
 # Paquetes posibles para temas (soporta 'theme' y 'themes')
-POSSIBLE_THEME_PACKAGES = ("app.ui.theme", "app.ui.themes")
+POSSIBLE_THEME_PACKAGES = ("theme", "themes", "app.ui.theme", "app.ui.themes")
 
 # Módulos que no deben considerarse temas
 EXCLUDE_MODULES = {

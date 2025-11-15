@@ -41,6 +41,14 @@ from reporte_operadores import ReporteOperadores
 from TabGastosEquipos import TabGastosEquipos
 from TabPagosOperadores import TabPagosOperadores
 
+# Theme management imports
+try:
+    from theme import theme_manager
+    THEME_MANAGER_AVAILABLE = True
+except ImportError:
+    THEME_MANAGER_AVAILABLE = False
+    logger.warning("Theme manager not available - theme menu will be disabled")
+
 logger = logging.getLogger(__name__)
 
 class AppGUI(QMainWindow):
@@ -194,6 +202,11 @@ class AppGUI(QMainWindow):
         # New: Data source configuration
         config_menu.addAction("Configurar Fuente de Datos (Firestore/SQLite)...", self._configurar_fuente_datos)
         config_menu.addAction("Configurar Carpeta de Backups...", self._configurar_carpeta_backups)
+        
+        # New: Apariencia menu for theme selection
+        if THEME_MANAGER_AVAILABLE:
+            apariencia_menu = menubar.addMenu("Apariencia")
+            self._create_theme_submenu(apariencia_menu)
 
     def elegir_base_datos(self):
         archivo, _ = QFileDialog.getOpenFileName(
@@ -710,7 +723,80 @@ class AppGUI(QMainWindow):
                     "Error",
                     "No se pudo guardar la configuración."
                 )
-
+    
+    # === Theme Management Methods ===
+    
+    def _create_theme_submenu(self, parent_menu):
+        """Create submenu with available themes."""
+        if not THEME_MANAGER_AVAILABLE:
+            return
+        
+        try:
+            themes = theme_manager.list_themes()
+            current_theme = theme_manager.current_theme_id()
+            
+            for theme_info in themes:
+                action = QAction(theme_info.title, self)
+                action.setCheckable(True)
+                if theme_info.id == current_theme:
+                    action.setChecked(True)
+                action.triggered.connect(lambda checked, tid=theme_info.id: self._apply_theme(tid))
+                parent_menu.addAction(action)
+        except Exception as e:
+            logger.exception(f"Error creating theme submenu: {e}")
+            parent_menu.addAction("Error cargando temas").setEnabled(False)
+    
+    def _apply_theme(self, theme_id: str):
+        """Apply selected theme and save preference."""
+        if not THEME_MANAGER_AVAILABLE:
+            return
+        
+        try:
+            app = QApplication.instance()
+            success = theme_manager.apply_theme_by_id(app, theme_id)
+            
+            if success:
+                theme_manager.save_theme_selection(theme_id)
+                QMessageBox.information(
+                    self,
+                    "Tema aplicado",
+                    f"El tema se ha aplicado correctamente.\n"
+                    f"Algunos cambios pueden requerir reiniciar la aplicación."
+                )
+                # Refresh the menu to update checkmarks
+                self._refresh_theme_menu()
+            else:
+                QMessageBox.warning(
+                    self,
+                    "Error",
+                    f"No se pudo aplicar el tema '{theme_id}'."
+                )
+        except Exception as e:
+            logger.exception(f"Error applying theme {theme_id}: {e}")
+            QMessageBox.critical(
+                self,
+                "Error",
+                f"Error al aplicar el tema: {e}"
+            )
+    
+    def _refresh_theme_menu(self):
+        """Refresh theme menu to update checkmarks."""
+        try:
+            menubar = self.menuBar()
+            for action in menubar.actions():
+                if action.text() == "Apariencia":
+                    menu = action.menu()
+                    if menu:
+                        current_theme = theme_manager.current_theme_id()
+                        for menu_action in menu.actions():
+                            # Find matching theme and update checkmark
+                            for theme_info in theme_manager.list_themes():
+                                if menu_action.text() == theme_info.title:
+                                    menu_action.setChecked(theme_info.id == current_theme)
+                                    break
+                    break
+        except Exception as e:
+            logger.exception(f"Error refreshing theme menu: {e}")
 
 
 def get_save_file_with_extension(parent, formato, nombre_archivo_sugerido):
