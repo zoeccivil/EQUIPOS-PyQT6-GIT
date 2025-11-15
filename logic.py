@@ -60,9 +60,9 @@ class DatabaseManager:
             """
             CREATE TABLE IF NOT EXISTS cuentas (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                nombre TEXT NOT NULL,
+                nombre TEXT NOT NULL UNIQUE,
                 tipo_cuenta TEXT,
-                UNIQUE(nombre, tipo_cuenta)
+                tipo TEXT DEFAULT 'normal'
             )
             """,
             """
@@ -86,13 +86,18 @@ class DatabaseManager:
             """
             CREATE TABLE IF NOT EXISTS equipos (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                proyecto_id INTEGER,
+                proyecto_id INTEGER NOT NULL,
                 nombre TEXT NOT NULL,
+                placa TEXT,
+                ficha TEXT,
                 marca TEXT,
                 modelo TEXT,
                 categoria TEXT,
-                equipo TEXT,
-                activo INTEGER DEFAULT 1
+                subcategoria TEXT,
+                activo INTEGER DEFAULT 1,
+                mantenimiento_trigger_tipo TEXT CHECK(mantenimiento_trigger_tipo IN ('HORAS', 'KM', 'DIAS')),
+                mantenimiento_trigger_valor REAL,
+                categoria_id INTEGER
             )
             """,
             """
@@ -551,13 +556,18 @@ class DatabaseManager:
         self._conn.execute("""
             CREATE TABLE IF NOT EXISTS equipos (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                proyecto_id INTEGER,
+                proyecto_id INTEGER NOT NULL,
                 nombre TEXT NOT NULL,
+                placa TEXT,
+                ficha TEXT,
                 marca TEXT,
                 modelo TEXT,
                 categoria TEXT,
-                equipo TEXT,
-                activo INTEGER DEFAULT 1
+                subcategoria TEXT,
+                activo INTEGER DEFAULT 1,
+                mantenimiento_trigger_tipo TEXT CHECK(mantenimiento_trigger_tipo IN ('HORAS', 'KM', 'DIAS')),
+                mantenimiento_trigger_valor REAL,
+                categoria_id INTEGER
             )
         """)
         self._conn.commit()
@@ -574,7 +584,8 @@ class DatabaseManager:
                 precio_por_hora REAL,
                 conduce TEXT,
                 ubicacion TEXT,
-                conduce_adjunto_path TEXT
+                conduce_adjunto_path TEXT,
+                equipo_id INTEGER
             )
         """)
         self._conn.commit()
@@ -1588,11 +1599,13 @@ class DatabaseManager:
         query = """
             CREATE TABLE IF NOT EXISTS equipos_entidades (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
+                proyecto_id INTEGER NOT NULL,
                 nombre TEXT NOT NULL,
-                tipo TEXT NOT NULL,
-                proyecto_id INTEGER,
-                activo INTEGER DEFAULT 1,
-                UNIQUE(nombre, tipo, proyecto_id)
+                tipo TEXT NOT NULL CHECK (tipo IN ('Cliente','Operador')),
+                activo INTEGER NOT NULL DEFAULT 1,
+                telefono TEXT,
+                cedula TEXT,
+                UNIQUE (proyecto_id, nombre, tipo)
             )
         """
         self.execute(query)
