@@ -145,7 +145,7 @@ class AppGUI(QMainWindow):
         # New: Herramientas menu for Firestore operations
         herramientas_menu = menubar.addMenu("Herramientas")
         herramientas_menu.addAction("Migrar desde SQLite a Firestore...", self._abrir_dialogo_migracion)
-        herramientas_menu.addAction("Crear Backup SQLite desde Firestore...", self._abrir_dialogo_backup)
+        herramientas_menu.addAction("Migrar desde Firestore a SQLite...", self._abrir_dialogo_backup)
         herramientas_menu.addSeparator()
         herramientas_menu.addAction("Verificar Conexión Firestore", self._verificar_conexion_firestore)
 
