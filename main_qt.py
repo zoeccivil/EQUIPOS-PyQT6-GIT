@@ -97,13 +97,28 @@ def sync_from_firestore_to_sqlite(firestore_repo, sqlite_db_manager):
                 # Insert each record into SQLite
                 for registro in registros:
                     try:
+                        # Remove Firestore internal fields
+                        registro_limpio = {k: v for k, v in registro.items() if not k.startswith('_firestore')}
+                        
                         # Build INSERT statement dynamically
-                        columns = list(registro.keys())
+                        columns = list(registro_limpio.keys())
                         placeholders = ', '.join(['?' for _ in columns])
                         column_names = ', '.join(columns)
                         
                         query = f"INSERT OR REPLACE INTO {tabla} ({column_names}) VALUES ({placeholders})"
-                        values = [registro[col] for col in columns]
+                        
+                        # Ensure proper type conversion for SQLite
+                        values = []
+                        for col in columns:
+                            val = registro_limpio[col]
+                            # Convert numeric strings back to numbers if needed
+                            if isinstance(val, str) and col.endswith('_id'):
+                                try:
+                                    values.append(int(val))
+                                except (ValueError, TypeError):
+                                    values.append(val)
+                            else:
+                                values.append(val)
                         
                         sqlite_db_manager.execute(query, values)
                     except Exception as e:
