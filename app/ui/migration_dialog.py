@@ -84,17 +84,6 @@ class MigrationWorker(QThread):
                 self.collections_migrated += 1  # Continue with next table
         
         self._update_progress("Migración completada")
-        
-        # 10. Migrate Mantenimientos
-        self._update_progress("Migrando mantenimientos...")
-        mantenimientos = self.sqlite_repo.obtener_mantenimientos()
-        for mantenimiento in mantenimientos:
-            try:
-                self.firestore_repo.crear_mantenimiento(mantenimiento)
-            except Exception as e:
-                logger.warning(f"Error migrando mantenimiento: {e}")
-        
-        self._update_progress("Migración completada")
 
 
 class DialogoMigracionFirestore(QDialog):
