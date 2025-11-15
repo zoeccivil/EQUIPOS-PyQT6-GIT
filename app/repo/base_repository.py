@@ -163,6 +163,23 @@ class BaseRepository(ABC):
         """Obtener todas las cuentas."""
         pass
     
+    # --- GENERIC TABLE ACCESS (for migration and advanced operations) ---
+    @abstractmethod
+    def obtener_tabla_completa(self, nombre_tabla: str) -> List[Dict[str, Any]]:
+        """
+        Obtener todos los registros de una tabla genérica.
+        Útil para migraciones y backups completos.
+        """
+        pass
+    
+    @abstractmethod
+    def insertar_registro_generico(self, nombre_tabla: str, datos: Dict[str, Any]) -> bool:
+        """
+        Insertar un registro en una tabla genérica.
+        Útil para migraciones y backups.
+        """
+        pass
+    
     # --- HEALTH CHECK ---
     @abstractmethod
     def verificar_conexion(self) -> bool:

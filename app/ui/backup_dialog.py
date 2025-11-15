@@ -30,7 +30,20 @@ class BackupWorker(QThread):
         self.firestore_repo = firestore_repo
         self.sqlite_repo = sqlite_repo
         self.collections_backed_up = 0
-        self.total_collections = 9
+        
+        # List of all tables to backup
+        self.tables_to_backup = [
+            "proyectos", "categorias", "subcategorias", "cuentas",
+            "equipos_entidades", "equipos", "transacciones",
+            "equipos_alquiler_meta", "pagos", "mantenimientos",
+            "equipos_mantenimiento", "companies", "currencies",
+            "third_parties", "settings", "invoices", "invoice_items",
+            "quotations", "quotation_items", "tax_calculations",
+            "tax_calculation_details", "proyecto_categorias",
+            "proyecto_cuentas", "proyecto_subcategorias",
+            "transferencias", "presupuestos", "operadores"
+        ]
+        self.total_collections = len(self.tables_to_backup)
     
     def run(self):
         """Execute the backup."""
@@ -47,112 +60,30 @@ class BackupWorker(QThread):
         self.progress.emit(progress, message)
     
     def _backup_all_data(self):
-        """Backup all data from Firestore to SQLite."""
+        """Backup all data from Firestore to SQLite using generic table backup."""
         
-        # 1. Backup Proyectos
-        self._update_progress("Respaldando proyectos...")
-        proyectos = self.firestore_repo.obtener_proyectos()
-        for proyecto in proyectos:
+        # Backup all tables generically
+        for tabla in self.tables_to_backup:
             try:
-                self.sqlite_repo.crear_proyecto(
-                    nombre=proyecto.get("nombre", ""),
-                    descripcion=proyecto.get("descripcion", ""),
-                    moneda=proyecto.get("moneda", "RD$"),
-                    cuenta_principal=proyecto.get("cuenta_principal", "")
-                )
+                self._update_progress(f"Respaldando {tabla}...")
+                registros = self.firestore_repo.obtener_tabla_completa(tabla)
+                
+                logger.info(f"Respaldando {len(registros)} registros de {tabla}")
+                
+                for registro in registros:
+                    try:
+                        # Remove Firestore-specific fields
+                        datos = {k: v for k, v in registro.items() if k != "_firestore_id"}
+                        # Insert into SQLite
+                        self.sqlite_repo.insertar_registro_generico(tabla, datos)
+                    except Exception as e:
+                        logger.warning(f"Error respaldando registro de {tabla}: {e}")
+                
+                self.collections_backed_up += 1
+                
             except Exception as e:
-                logger.warning(f"Error respaldando proyecto: {e}")
-        self.collections_backed_up += 1
-        
-        # 2. Backup Clientes
-        self._update_progress("Respaldando clientes...")
-        clientes = self.firestore_repo.obtener_clientes()
-        for cliente in clientes:
-            try:
-                datos = {k: v for k, v in cliente.items() if k not in ["id", "_firestore_id"]}
-                self.sqlite_repo.crear_cliente(
-                    nombre=cliente.get("nombre", ""),
-                    **datos
-                )
-            except Exception as e:
-                logger.warning(f"Error respaldando cliente: {e}")
-        self.collections_backed_up += 1
-        
-        # 3. Backup Operadores
-        self._update_progress("Respaldando operadores...")
-        operadores = self.firestore_repo.obtener_operadores()
-        for operador in operadores:
-            try:
-                datos = {k: v for k, v in operador.items() if k not in ["id", "_firestore_id"]}
-                self.sqlite_repo.crear_operador(
-                    nombre=operador.get("nombre", ""),
-                    **datos
-                )
-            except Exception as e:
-                logger.warning(f"Error respaldando operador: {e}")
-        self.collections_backed_up += 1
-        
-        # 4. Backup Equipos
-        self._update_progress("Respaldando equipos...")
-        equipos = self.firestore_repo.obtener_equipos()
-        for equipo in equipos:
-            try:
-                self.sqlite_repo.crear_equipo(
-                    proyecto_id=equipo.get("proyecto_id", 0),
-                    nombre=equipo.get("nombre", ""),
-                    marca=equipo.get("marca", ""),
-                    modelo=equipo.get("modelo", ""),
-                    categoria=equipo.get("categoria", ""),
-                    equipo=equipo.get("equipo", "")
-                )
-            except Exception as e:
-                logger.warning(f"Error respaldando equipo: {e}")
-        self.collections_backed_up += 1
-        
-        # 5. Backup Alquileres
-        self._update_progress("Respaldando alquileres...")
-        alquileres = self.firestore_repo.obtener_alquileres()
-        for alquiler in alquileres:
-            try:
-                # Remove Firestore-specific fields
-                datos = {k: v for k, v in alquiler.items() if k != "_firestore_id"}
-                self.sqlite_repo.crear_alquiler(datos)
-            except Exception as e:
-                logger.warning(f"Error respaldando alquiler: {e}")
-        self.collections_backed_up += 1
-        
-        # 6. Backup Transacciones
-        self._update_progress("Respaldando transacciones...")
-        transacciones = self.firestore_repo.obtener_transacciones()
-        for transaccion in transacciones:
-            try:
-                datos = {k: v for k, v in transaccion.items() if k != "_firestore_id"}
-                self.sqlite_repo.crear_transaccion(datos)
-            except Exception as e:
-                logger.warning(f"Error respaldando transacción: {e}")
-        self.collections_backed_up += 1
-        
-        # 7. Backup Pagos
-        self._update_progress("Respaldando pagos...")
-        pagos = self.firestore_repo.obtener_pagos()
-        for pago in pagos:
-            try:
-                datos = {k: v for k, v in pago.items() if k != "_firestore_id"}
-                self.sqlite_repo.crear_pago(datos)
-            except Exception as e:
-                logger.warning(f"Error respaldando pago: {e}")
-        self.collections_backed_up += 1
-        
-        # 8. Backup Mantenimientos
-        self._update_progress("Respaldando mantenimientos...")
-        mantenimientos = self.firestore_repo.obtener_mantenimientos()
-        for mantenimiento in mantenimientos:
-            try:
-                datos = {k: v for k, v in mantenimiento.items() if k != "_firestore_id"}
-                self.sqlite_repo.crear_mantenimiento(datos)
-            except Exception as e:
-                logger.warning(f"Error respaldando mantenimiento: {e}")
-        self.collections_backed_up += 1
+                logger.error(f"Error respaldando tabla {tabla}: {e}")
+                self.collections_backed_up += 1  # Continue with next table
         
         self._update_progress("Backup completado")
 

@@ -30,7 +30,20 @@ class MigrationWorker(QThread):
         self.sqlite_repo = sqlite_repo
         self.firestore_repo = firestore_repo
         self.collections_migrated = 0
-        self.total_collections = 9  # Number of collections to migrate
+        
+        # List of all tables to migrate from the database
+        self.tables_to_migrate = [
+            "proyectos", "categorias", "subcategorias", "cuentas",
+            "equipos_entidades", "equipos", "transacciones",
+            "equipos_alquiler_meta", "pagos", "mantenimientos",
+            "equipos_mantenimiento", "companies", "currencies",
+            "third_parties", "settings", "invoices", "invoice_items",
+            "quotations", "quotation_items", "tax_calculations",
+            "tax_calculation_details", "proyecto_categorias",
+            "proyecto_cuentas", "proyecto_subcategorias",
+            "transferencias", "presupuestos", "operadores"
+        ]
+        self.total_collections = len(self.tables_to_migrate)
     
     def run(self):
         """Execute the migration."""
@@ -47,124 +60,30 @@ class MigrationWorker(QThread):
         self.progress.emit(progress, message)
     
     def _migrate_all_data(self):
-        """Migrate all data from SQLite to Firestore."""
+        """Migrate all data from SQLite to Firestore using generic table migration."""
         
-        # 1. Migrate Proyectos
-        self._update_progress("Migrando proyectos...")
-        proyectos = self.sqlite_repo.obtener_proyectos()
-        for proyecto in proyectos:
+        # Migrate all tables generically
+        for tabla in self.tables_to_migrate:
             try:
-                # Check if already exists
-                existing = self.firestore_repo.obtener_proyecto_por_id(proyecto["id"])
-                if not existing:
-                    self.firestore_repo.crear_proyecto(
-                        nombre=proyecto.get("nombre", ""),
-                        descripcion=proyecto.get("descripcion", ""),
-                        moneda=proyecto.get("moneda", "RD$"),
-                        cuenta_principal=proyecto.get("cuenta_principal", "")
-                    )
+                self._update_progress(f"Migrando {tabla}...")
+                registros = self.sqlite_repo.obtener_tabla_completa(tabla)
+                
+                logger.info(f"Migrando {len(registros)} registros de {tabla}")
+                
+                for registro in registros:
+                    try:
+                        # Insert each record into Firestore
+                        self.firestore_repo.insertar_registro_generico(tabla, registro)
+                    except Exception as e:
+                        logger.warning(f"Error migrando registro de {tabla}: {e}")
+                
+                self.collections_migrated += 1
+                
             except Exception as e:
-                logger.warning(f"Error migrando proyecto {proyecto.get('id')}: {e}")
-        self.collections_migrated += 1
+                logger.error(f"Error migrando tabla {tabla}: {e}")
+                self.collections_migrated += 1  # Continue with next table
         
-        # 2. Migrate Categorías
-        self._update_progress("Migrando categorías...")
-        categorias = self.sqlite_repo.obtener_categorias()
-        # Categories are typically auto-created, just log count
-        logger.info(f"Categorías en SQLite: {len(categorias)}")
-        self.collections_migrated += 1
-        
-        # 3. Migrate Cuentas
-        self._update_progress("Migrando cuentas...")
-        cuentas = self.sqlite_repo.obtener_cuentas()
-        logger.info(f"Cuentas en SQLite: {len(cuentas)}")
-        self.collections_migrated += 1
-        
-        # 4. Migrate Clientes
-        self._update_progress("Migrando clientes...")
-        clientes = self.sqlite_repo.obtener_clientes()
-        for cliente in clientes:
-            try:
-                existing = self.firestore_repo.obtener_cliente_por_id(cliente["id"])
-                if not existing:
-                    datos = {k: v for k, v in cliente.items() if k != "id"}
-                    self.firestore_repo.crear_cliente(
-                        nombre=cliente.get("nombre", ""),
-                        **datos
-                    )
-            except Exception as e:
-                logger.warning(f"Error migrando cliente {cliente.get('id')}: {e}")
-        self.collections_migrated += 1
-        
-        # 5. Migrate Operadores
-        self._update_progress("Migrando operadores...")
-        operadores = self.sqlite_repo.obtener_operadores()
-        for operador in operadores:
-            try:
-                existing = self.firestore_repo.obtener_operador_por_id(operador["id"])
-                if not existing:
-                    datos = {k: v for k, v in operador.items() if k != "id"}
-                    self.firestore_repo.crear_operador(
-                        nombre=operador.get("nombre", ""),
-                        **datos
-                    )
-            except Exception as e:
-                logger.warning(f"Error migrando operador {operador.get('id')}: {e}")
-        self.collections_migrated += 1
-        
-        # 6. Migrate Equipos
-        self._update_progress("Migrando equipos...")
-        equipos = self.sqlite_repo.obtener_equipos()
-        for equipo in equipos:
-            try:
-                existing = self.firestore_repo.obtener_equipo_por_id(equipo["id"])
-                if not existing:
-                    self.firestore_repo.crear_equipo(
-                        proyecto_id=equipo.get("proyecto_id", 0),
-                        nombre=equipo.get("nombre", ""),
-                        marca=equipo.get("marca", ""),
-                        modelo=equipo.get("modelo", ""),
-                        categoria=equipo.get("categoria", ""),
-                        equipo=equipo.get("equipo", "")
-                    )
-            except Exception as e:
-                logger.warning(f"Error migrando equipo {equipo.get('id')}: {e}")
-        self.collections_migrated += 1
-        
-        # 7. Migrate Alquileres
-        self._update_progress("Migrando alquileres...")
-        alquileres = self.sqlite_repo.obtener_alquileres()
-        for alquiler in alquileres:
-            try:
-                alquiler_id = alquiler.get("id")
-                existing = self.firestore_repo.obtener_alquiler_por_id(alquiler_id)
-                if not existing:
-                    self.firestore_repo.crear_alquiler(alquiler)
-            except Exception as e:
-                logger.warning(f"Error migrando alquiler {alquiler.get('id')}: {e}")
-        self.collections_migrated += 1
-        
-        # 8. Migrate Transacciones
-        self._update_progress("Migrando transacciones...")
-        transacciones = self.sqlite_repo.obtener_transacciones()
-        for transaccion in transacciones:
-            try:
-                # Transactions might exist, skip if ID exists
-                self.firestore_repo.crear_transaccion(transaccion)
-            except Exception as e:
-                logger.warning(f"Error migrando transacción: {e}")
-        self.collections_migrated += 1
-        
-        # 9. Migrate Pagos
-        self._update_progress("Migrando pagos...")
-        pagos = self.sqlite_repo.obtener_pagos()
-        for pago in pagos:
-            try:
-                # Create pago in Firestore
-                self.firestore_repo.crear_pago(pago)
-            except Exception as e:
-                logger.warning(f"Error migrando pago: {e}")
-        self.collections_migrated += 1
+        self._update_progress("Migración completada")
         
         # 10. Migrate Mantenimientos
         self._update_progress("Migrando mantenimientos...")

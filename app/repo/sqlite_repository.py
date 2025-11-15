@@ -203,6 +203,37 @@ class SQLiteRepository(BaseRepository):
         """Obtener todas las cuentas."""
         return self.db.obtener_cuentas()
     
+    # --- GENERIC TABLE ACCESS ---
+    def obtener_tabla_completa(self, nombre_tabla: str) -> List[Dict[str, Any]]:
+        """
+        Obtener todos los registros de una tabla genérica.
+        """
+        try:
+            sql = f"SELECT * FROM {nombre_tabla}"
+            return self.db.fetchall(sql)
+        except Exception as e:
+            logger.error(f"Error obteniendo tabla {nombre_tabla}: {e}")
+            return []
+    
+    def insertar_registro_generico(self, nombre_tabla: str, datos: Dict[str, Any]) -> bool:
+        """
+        Insertar un registro en una tabla genérica.
+        """
+        try:
+            # Build INSERT statement
+            columnas = list(datos.keys())
+            placeholders = ', '.join(['?' for _ in columnas])
+            columnas_str = ', '.join(columnas)
+            
+            sql = f"INSERT OR REPLACE INTO {nombre_tabla} ({columnas_str}) VALUES ({placeholders})"
+            valores = [datos[col] for col in columnas]
+            
+            self.db.execute(sql, valores)
+            return True
+        except Exception as e:
+            logger.warning(f"Error insertando en tabla {nombre_tabla}: {e}")
+            return False
+    
     # --- HEALTH CHECK ---
     def verificar_conexion(self) -> bool:
         """Verificar que la conexión al backend está activa."""

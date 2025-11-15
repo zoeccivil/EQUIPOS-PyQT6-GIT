@@ -59,9 +59,15 @@ class AppGUI(QMainWindow):
         self.operador_filtro = "Todos"
         self.fecha_inicio = None
         self.fecha_fin = None
-        self.setWindowTitle("Gestor de Alquileres")
+        
+        # Set window title with data source indicator
+        data_source_display = config.get("data_source_display", "sqlite")
+        self.setWindowTitle(f"Gestor de Alquileres - Fuente de datos: {data_source_display}")
         self.resize(1366, 768)
         self.restart_required = False
+        
+        # Create status bar to show data source
+        self.statusBar().showMessage(f"Conectado a: {data_source_display}")
 
         # 1. Crear los tabs primero
         self._create_tabs()
@@ -70,7 +76,12 @@ class AppGUI(QMainWindow):
         self._create_menu_bar()
 
         # 3. Cargar configuración
-        self.config = config_manager.cargar_configuracion()
+        try:
+            legacy_config = config_manager.cargar_configuracion()
+            if legacy_config:
+                self.config.update(legacy_config)
+        except Exception as e:
+            print(f"[WARN] No se pudo cargar configuración legacy: {e}")
 
         # 4. Cargar proyecto inicial al arranque
         self.cargar_proyecto_inicial()
@@ -181,7 +192,8 @@ class AppGUI(QMainWindow):
             self.dashboard_tab.configurar_filtros()
             self.registro_tab.poblar_filtros()
             self.registro_tab.refrescar_tabla()
-            self.setWindowTitle(f"Gestor de Alquileres - {self.proyecto_actual['nombre']}")
+            data_source_display = self.config.get("data_source_display", "sqlite")
+            self.setWindowTitle(f"Gestor de Alquileres - {self.proyecto_actual['nombre']} [{data_source_display}]")
             # --- INTEGRACIÓN DEL NUEVO TAB DE GASTOS (si existe) ---
             if hasattr(self, "gastos_equipos_tab"):
                 self.gastos_equipos_tab.proyecto_id = self.proyecto_actual['id']
@@ -200,7 +212,8 @@ class AppGUI(QMainWindow):
         self.dashboard_tab.configurar_filtros()
         self.registro_tab.proyecto_actual = self.proyecto_actual
         self.registro_tab.refrescar_tabla()
-        self.setWindowTitle(f"Gestor de Alquileres - {self.proyecto_actual['nombre']}")
+        data_source_display = self.config.get("data_source_display", "sqlite")
+        self.setWindowTitle(f"Gestor de Alquileres - {self.proyecto_actual['nombre']} [{data_source_display}]")
 
     # Métodos de backup/restauración
     def _crear_backup(self):

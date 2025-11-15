@@ -104,6 +104,7 @@ def main():
     # Initialize repository based on configured data source
     repository = None
     db_manager = None  # For backward compatibility with tabs that still use it
+    actual_data_source = data_source  # Track which source is actually being used
     
     if data_source == "firestore":
         # FIRESTORE MODE: Firestore is the primary data source
@@ -117,82 +118,101 @@ def main():
                 "Firestore no configurado",
                 "Firestore no está configurado como fuente de datos principal.\n\n"
                 "¿Deseas configurarlo ahora?",
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No | QMessageBox.StandardButton.Cancel
             )
             
             if reply == QMessageBox.StandardButton.Yes:
                 # Show configuration dialog
                 config_dialog = DataSourceWidget(None, settings)
                 if config_dialog.exec() != QDialog.DialogCode.Accepted:
-                    logger.error("Usuario canceló la configuración de Firestore")
-                    QMessageBox.critical(
-                        None,
-                        "Sin configuración",
-                        "No se puede iniciar la aplicación sin configurar la fuente de datos."
-                    )
-                    sys.exit(1)
-                # Reload settings after configuration
-                settings = get_settings()
+                    logger.warning("Usuario canceló la configuración de Firestore, usando modo SQLite")
+                    # Fall back to SQLite mode instead of exiting
+                    data_source = "sqlite"
+                    actual_data_source = "sqlite"
+                else:
+                    # Reload settings after configuration
+                    settings = get_settings()
+            elif reply == QMessageBox.StandardButton.No:
+                logger.warning("Usuario decidió no configurar Firestore, usando modo SQLite")
+                # Fall back to SQLite mode instead of exiting
+                data_source = "sqlite"
+                actual_data_source = "sqlite"
             else:
-                logger.error("Usuario decidió no configurar Firestore")
-                QMessageBox.critical(
-                    None,
-                    "Sin configuración",
-                    "No se puede iniciar la aplicación sin configurar Firestore."
-                )
-                sys.exit(1)
+                # User cancelled, fall back to SQLite
+                logger.warning("Usuario canceló, usando modo SQLite")
+                data_source = "sqlite"
+                actual_data_source = "sqlite"
         
-        # Try to connect to Firestore
-        try:
-            logger.info("Conectando a Firestore...")
-            repository = RepositoryFactory.create_from_settings(settings)
-            logger.info("Conexión a Firestore establecida exitosamente")
-            
-        except ConnectionError as e:
-            logger.error(f"Error de conexión a Firestore: {e}")
-            QMessageBox.critical(
-                None,
-                "Error de Conexión Firestore",
-                f"No se pudo conectar a Firestore:\n\n{str(e)}\n\n"
-                "Verifica tu conexión a internet y tus credenciales en:\n"
-                "Configuración > Fuente de Datos"
-            )
-            sys.exit(1)
-        except Exception as e:
-            logger.exception(f"Error inesperado al conectar a Firestore: {e}")
-            QMessageBox.critical(
-                None,
-                "Error Firestore",
-                f"Error al inicializar Firestore:\n\n{str(e)}"
-            )
-            sys.exit(1)
+        # Try to connect to Firestore (only if we're still in firestore mode)
+        if data_source == "firestore":
+            try:
+                logger.info("Conectando a Firestore...")
+                repository = RepositoryFactory.create_from_settings(settings)
+                logger.info("Conexión a Firestore establecida exitosamente")
+                
+            except ConnectionError as e:
+                logger.error(f"Error de conexión a Firestore: {e}")
+                reply = QMessageBox.warning(
+                    None,
+                    "Error de Conexión Firestore",
+                    f"No se pudo conectar a Firestore:\n\n{str(e)}\n\n"
+                    "¿Deseas continuar con SQLite en modo local?",
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+                )
+                if reply == QMessageBox.StandardButton.Yes:
+                    logger.info("Usuario eligió continuar con SQLite")
+                    data_source = "sqlite"
+                    actual_data_source = "sqlite (fallback)"
+                else:
+                    logger.info("Usuario decidió no continuar")
+                    sys.exit(0)
+            except Exception as e:
+                logger.exception(f"Error inesperado al conectar a Firestore: {e}")
+                reply = QMessageBox.warning(
+                    None,
+                    "Error Firestore",
+                    f"Error al inicializar Firestore:\n\n{str(e)}\n\n"
+                    "¿Deseas continuar con SQLite en modo local?",
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+                )
+                if reply == QMessageBox.StandardButton.Yes:
+                    logger.info("Usuario eligió continuar con SQLite")
+                    data_source = "sqlite"
+                    actual_data_source = "sqlite (fallback)"
+                else:
+                    logger.info("Usuario decidió no continuar")
+                    sys.exit(0)
     
-    else:
+    if data_source == "sqlite":
         # SQLITE MODE: SQLite is the data source (legacy or for testing)
         logger.info("Inicializando SQLite como fuente de datos...")
         
         db_path = settings.get_sqlite_path()
         
         # If database doesn't exist, ask user to select one
-        while not os.path.isfile(db_path):
-            QMessageBox.warning(
+        if not os.path.isfile(db_path):
+            reply = QMessageBox.question(
                 None, 
                 "Base de datos no encontrada",
                 f"No se encontró la base de datos:\n{db_path}\n\n"
-                "Por favor, selecciona una base de datos SQLite."
+                "¿Deseas seleccionar una base de datos SQLite existente?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
             )
-            selected = solicitar_bd_por_dialogo()
-            if not selected:
-                QMessageBox.critical(
-                    None, 
-                    "Sin base de datos", 
-                    "No se seleccionó una base de datos. La aplicación se cerrará."
-                )
-                logger.error("No se seleccionó una base de datos al iniciar. Saliendo.")
-                sys.exit(1)
-            db_path = selected
-            settings.set_sqlite_path(db_path)
-            settings.save()
+            
+            if reply == QMessageBox.StandardButton.Yes:
+                selected = solicitar_bd_por_dialogo()
+                if selected and os.path.isfile(selected):
+                    db_path = selected
+                    settings.set_sqlite_path(db_path)
+                    settings.save()
+                else:
+                    logger.warning("No se seleccionó una base de datos válida")
+                    db_path = ":memory:"  # Use in-memory database as fallback
+                    actual_data_source = "sqlite (memoria)"
+            else:
+                logger.info("Usuario decidió no seleccionar base de datos, usando memoria")
+                db_path = ":memory:"
+                actual_data_source = "sqlite (memoria)"
         
         # Create SQLite repository
         try:
@@ -200,36 +220,52 @@ def main():
             
             # Also create legacy DatabaseManager for backward compatibility
             db_manager = DatabaseManager(db_path)
-            db_manager.crear_tablas_nucleo()
-            db_manager.sembrar_datos_iniciales()
-            db_manager.crear_tabla_equipos()
-            db_manager.asegurar_tabla_alquiler_meta()
-            db_manager.asegurar_tabla_pagos()
-            db_manager.asegurar_tabla_mantenimientos()
-            db_manager.asegurar_tablas_mantenimiento()
-            db_manager.crear_indices()
-            db_manager.asegurar_tabla_equipos_entidades()
+            try:
+                db_manager.crear_tablas_nucleo()
+                db_manager.sembrar_datos_iniciales()
+                db_manager.crear_tabla_equipos()
+                db_manager.asegurar_tabla_alquiler_meta()
+                db_manager.asegurar_tabla_pagos()
+                db_manager.asegurar_tabla_mantenimientos()
+                db_manager.asegurar_tablas_mantenimiento()
+                db_manager.crear_indices()
+                db_manager.asegurar_tabla_equipos_entidades()
+            except Exception as e:
+                logger.warning(f"Error inicializando algunas tablas SQLite: {e}")
             
-            logger.info("SQLite inicializado exitosamente")
+            logger.info(f"SQLite inicializado exitosamente en: {db_path}")
             
         except Exception as e:
             logger.exception(f"Error inicializando SQLite: {e}")
-            QMessageBox.critical(
+            QMessageBox.warning(
                 None,
                 "Error BD SQLite",
-                f"No se pudo abrir la base de datos:\n{db_path}\n\n{e}"
+                f"No se pudo abrir la base de datos:\n{db_path}\n\n{e}\n\n"
+                "Continuando con base de datos en memoria."
             )
-            sys.exit(1)
+            # Create in-memory database as last resort
+            db_path = ":memory:"
+            actual_data_source = "sqlite (memoria)"
+            try:
+                repository = RepositoryFactory.create_sqlite(settings, db_path)
+                db_manager = DatabaseManager(db_path)
+                db_manager.crear_tablas_nucleo()
+                db_manager.sembrar_datos_iniciales()
+            except Exception as e2:
+                logger.exception(f"Error crítico creando base de datos en memoria: {e2}")
+                QMessageBox.critical(None, "Error Crítico", f"No se pudo inicializar la aplicación:\n{e2}")
+                sys.exit(1)
     
     # Create legacy config dict for AppGUI compatibility
     config = {
-        "database_path": settings.get_sqlite_path(),
-        "carpeta_conduces": legacy_config.get("carpeta_conduces", "")
+        "database_path": settings.get_sqlite_path() if data_source == "sqlite" else ":memory:",
+        "carpeta_conduces": legacy_config.get("carpeta_conduces", ""),
+        "data_source_display": actual_data_source  # Add data source indicator
     }
     
     # If we're using Firestore, create a temporary DatabaseManager for tabs that still need it
     # This is a transitional measure until all tabs are updated to use Repository
-    if data_source == "firestore" and db_manager is None:
+    if actual_data_source.startswith("firestore") and db_manager is None:
         # Create a temporary in-memory SQLite database for compatibility
         # Tabs will eventually be updated to use repository instead
         logger.info("Creando DatabaseManager temporal para compatibilidad con tabs...")

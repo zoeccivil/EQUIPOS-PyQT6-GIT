@@ -9,6 +9,7 @@ from typing import List, Dict, Any, Optional
 from datetime import date, datetime
 import requests
 import json
+import uuid
 
 from app.repo.base_repository import BaseRepository
 
@@ -531,6 +532,33 @@ class FirestoreRepository(BaseRepository):
         except Exception as e:
             logger.error(f"Error obteniendo cuentas: {e}")
             return []
+    
+    # --- GENERIC TABLE ACCESS ---
+    def obtener_tabla_completa(self, nombre_tabla: str) -> List[Dict[str, Any]]:
+        """
+        Obtener todos los registros de una tabla/colección genérica.
+        """
+        try:
+            response = self._firestore_request("GET", nombre_tabla)
+            documents = response.get("documents", [])
+            return [self._convert_firestore_doc(doc) for doc in documents]
+        except Exception as e:
+            logger.error(f"Error obteniendo tabla {nombre_tabla}: {e}")
+            return []
+    
+    def insertar_registro_generico(self, nombre_tabla: str, datos: Dict[str, Any]) -> bool:
+        """
+        Insertar un registro en una colección genérica.
+        """
+        try:
+            # Use ID if present, otherwise generate one
+            doc_id = datos.get("id", str(uuid.uuid4()))
+            data = self._convert_to_firestore_fields(datos)
+            self._firestore_request("PATCH", f"{nombre_tabla}/{doc_id}", data)
+            return True
+        except Exception as e:
+            logger.warning(f"Error insertando en tabla {nombre_tabla}: {e}")
+            return False
     
     # --- HEALTH CHECK ---
     def verificar_conexion(self) -> bool:
