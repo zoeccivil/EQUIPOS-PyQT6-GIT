@@ -1,9 +1,11 @@
 from PyQt6.QtWidgets import (
-    QApplication, QMainWindow, QTabWidget, QFileDialog, QMessageBox, QMenuBar, QMenu
+    QApplication, QMainWindow, QTabWidget, QFileDialog, QMessageBox, QMenuBar, QMenu,
+    QWidget, QVBoxLayout, QLabel
 )
 from PyQt6.QtGui import QAction
 from PyQt6.QtCore import QTimer
 import shutil
+import logging
 from datetime import datetime
 from dashboard_tab import DashboardTab
 from registro_alquileres_tab import RegistroAlquileresTab
@@ -38,6 +40,8 @@ from dialogo_reporte_operadores import DialogoReporteOperadores
 from reporte_operadores import ReporteOperadores
 from TabGastosEquipos import TabGastosEquipos
 from TabPagosOperadores import TabPagosOperadores
+
+logger = logging.getLogger(__name__)
 
 class AppGUI(QMainWindow):
     def __init__(self, db_manager, config, repository=None, settings=None):
@@ -88,20 +92,55 @@ class AppGUI(QMainWindow):
         QTimer.singleShot(100, self.cargar_proyecto_inicial)
 
     def _create_tabs(self):
+        """Create tabs with error handling to prevent crashes."""
         self.tabs = QTabWidget()
         self.setCentralWidget(self.tabs)
 
-        self.registro_tab = RegistroAlquileresTab(self.db, self.proyecto_actual, config=self.config)
-        self.tabs.addTab(self.registro_tab, "Registro de Alquileres")
+        # Create each tab with individual error handling
+        try:
+            self.registro_tab = RegistroAlquileresTab(self.db, self.proyecto_actual, config=self.config)
+            self.tabs.addTab(self.registro_tab, "Registro de Alquileres")
+        except Exception as e:
+            logger.error(f"Error creando tab Registro de Alquileres: {e}")
+            # Create placeholder tab
+            placeholder = QWidget()
+            layout = QVBoxLayout(placeholder)
+            layout.addWidget(QLabel(f"⚠️ Error cargando pestaña:\n{str(e)}\n\nIntenta migrar la base de datos completa."))
+            self.tabs.addTab(placeholder, "Registro de Alquileres")
+            self.registro_tab = None
 
-        self.gastos_equipos_tab = TabGastosEquipos(self.db, proyecto_id=8)
-        self.tabs.addTab(self.gastos_equipos_tab, "Gastos Equipos")
+        try:
+            self.gastos_equipos_tab = TabGastosEquipos(self.db, proyecto_id=8)
+            self.tabs.addTab(self.gastos_equipos_tab, "Gastos Equipos")
+        except Exception as e:
+            logger.error(f"Error creando tab Gastos Equipos: {e}")
+            placeholder = QWidget()
+            layout = QVBoxLayout(placeholder)
+            layout.addWidget(QLabel(f"⚠️ Error cargando pestaña:\n{str(e)}\n\nIntenta migrar la base de datos completa."))
+            self.tabs.addTab(placeholder, "Gastos Equipos")
+            self.gastos_equipos_tab = None
 
-        self.pagos_operadores_tab = TabPagosOperadores(self.db, proyecto_id=8)
-        self.tabs.addTab(self.pagos_operadores_tab, "Pagos a Operadores")
+        try:
+            self.pagos_operadores_tab = TabPagosOperadores(self.db, proyecto_id=8)
+            self.tabs.addTab(self.pagos_operadores_tab, "Pagos a Operadores")
+        except Exception as e:
+            logger.error(f"Error creando tab Pagos a Operadores: {e}")
+            placeholder = QWidget()
+            layout = QVBoxLayout(placeholder)
+            layout.addWidget(QLabel(f"⚠️ Error cargando pestaña:\n{str(e)}\n\nIntenta migrar la base de datos completa."))
+            self.tabs.addTab(placeholder, "Pagos a Operadores")
+            self.pagos_operadores_tab = None
 
-        self.dashboard_tab = DashboardTab(self.db, self.proyecto_actual)
-        self.tabs.addTab(self.dashboard_tab, "Dashboard")
+        try:
+            self.dashboard_tab = DashboardTab(self.db, self.proyecto_actual)
+            self.tabs.addTab(self.dashboard_tab, "Dashboard")
+        except Exception as e:
+            logger.error(f"Error creando tab Dashboard: {e}")
+            placeholder = QWidget()
+            layout = QVBoxLayout(placeholder)
+            layout.addWidget(QLabel(f"⚠️ Error cargando pestaña:\n{str(e)}\n\nIntenta migrar la base de datos completa."))
+            self.tabs.addTab(placeholder, "Dashboard")
+            self.dashboard_tab = None
 
         self.tabs.setCurrentIndex(0)
         
