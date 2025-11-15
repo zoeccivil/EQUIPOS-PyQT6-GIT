@@ -537,11 +537,36 @@ class FirestoreRepository(BaseRepository):
     def obtener_tabla_completa(self, nombre_tabla: str) -> List[Dict[str, Any]]:
         """
         Obtener todos los registros de una tabla/colección genérica.
+        Handles pagination to retrieve ALL documents.
         """
         try:
-            response = self._firestore_request("GET", nombre_tabla)
-            documents = response.get("documents", [])
-            return [self._convert_firestore_doc(doc) for doc in documents]
+            all_documents = []
+            page_token = None
+            page_size = 1000  # Maximum allowed by Firestore REST API
+            
+            while True:
+                # Build URL with pagination parameters
+                url_path = nombre_tabla
+                params = f"?pageSize={page_size}"
+                if page_token:
+                    params += f"&pageToken={page_token}"
+                
+                response = self._firestore_request("GET", f"{url_path}{params}")
+                documents = response.get("documents", [])
+                
+                # Convert and add to results
+                all_documents.extend([self._convert_firestore_doc(doc) for doc in documents])
+                
+                # Check if there are more pages
+                page_token = response.get("nextPageToken")
+                if not page_token:
+                    break  # No more pages
+                
+                logger.debug(f"Fetching next page for {nombre_tabla} (total so far: {len(all_documents)})")
+            
+            logger.info(f"Retrieved {len(all_documents)} total documents from {nombre_tabla}")
+            return all_documents
+            
         except Exception as e:
             logger.error(f"Error obteniendo tabla {nombre_tabla}: {e}")
             return []
