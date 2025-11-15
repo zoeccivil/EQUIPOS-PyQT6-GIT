@@ -65,6 +65,68 @@ def excepthook(exc_type, exc_value, exc_tb):
     sys.exit(1)
 
 
+def sync_from_firestore_to_sqlite(firestore_repo, sqlite_db_manager):
+    """
+    Sync all data from Firestore to the temporary SQLite database.
+    This allows tabs to read data from SQLite while Firestore is the primary storage.
+    """
+    logger.info("Sincronizando desde Firestore a SQLite temporal...")
+    
+    # List of all tables to sync
+    tables_to_sync = [
+        'proyectos', 'categorias', 'subcategorias', 'cuentas',
+        'equipos', 'equipos_entidades', 'equipos_mantenimiento',
+        'transacciones', 'equipos_alquiler_meta',
+        'pagos', 'mantenimientos',
+        'companies', 'currencies', 'third_parties', 'settings',
+        'invoices', 'invoice_items', 'quotations', 'quotation_items',
+        'tax_calculations', 'tax_calculation_details',
+        'proyecto_categorias', 'proyecto_cuentas', 'proyecto_subcategorias',
+        'transferencias', 'presupuestos', 'operadores'
+    ]
+    
+    synced_count = 0
+    failed_tables = []
+    
+    for tabla in tables_to_sync:
+        try:
+            # Get all records from Firestore
+            registros = firestore_repo.obtener_tabla_completa(tabla)
+            
+            if registros:
+                # Insert each record into SQLite
+                for registro in registros:
+                    try:
+                        # Build INSERT statement dynamically
+                        columns = list(registro.keys())
+                        placeholders = ', '.join(['?' for _ in columns])
+                        column_names = ', '.join(columns)
+                        
+                        query = f"INSERT OR REPLACE INTO {tabla} ({column_names}) VALUES ({placeholders})"
+                        values = [registro[col] for col in columns]
+                        
+                        sqlite_db_manager.execute(query, values)
+                    except Exception as e:
+                        logger.warning(f"Error insertando registro en {tabla}: {e}")
+                        continue
+                
+                logger.info(f"✓ Sincronizadas {len(registros)} registros de {tabla}")
+                synced_count += len(registros)
+            else:
+                logger.debug(f"○ Tabla {tabla} vacía, omitida")
+                
+        except Exception as e:
+            logger.warning(f"✗ Error sincronizando tabla {tabla}: {e}")
+            failed_tables.append(tabla)
+            continue
+    
+    if failed_tables:
+        logger.warning(f"Tablas con errores de sincronización: {', '.join(failed_tables)}")
+    
+    logger.info(f"Sincronización completada: {synced_count} registros sincronizados")
+    return synced_count, failed_tables
+
+
 def solicitar_bd_por_dialogo():
     """
     Muestra un QFileDialog para seleccionar una base de datos SQLite.
@@ -296,6 +358,20 @@ def main():
         _init_table_safe(db_manager.asegurar_tablas_mantenimiento, "mantenimiento")
         _init_table_safe(db_manager.crear_indices, "indices")
         _init_table_safe(db_manager.asegurar_tabla_equipos_entidades, "equipos_entidades")
+        
+        # Sync data from Firestore to the temporary SQLite database
+        # This makes migrated data visible in tabs
+        logger.info("Sincronizando datos desde Firestore a base de datos temporal...")
+        try:
+            synced, failed = sync_from_firestore_to_sqlite(repository, db_manager)
+            if synced > 0:
+                logger.info(f"✓ Sincronización exitosa: {synced} registros disponibles en tabs")
+            if failed:
+                logger.warning(f"Algunas tablas no se sincronizaron: {', '.join(failed)}")
+        except Exception as e:
+            logger.error(f"Error durante sincronización Firestore→SQLite: {e}")
+            logger.warning("La app continuará, pero los datos podrían no estar visibles en tabs")
+
 
     # Start the main window
     try:
