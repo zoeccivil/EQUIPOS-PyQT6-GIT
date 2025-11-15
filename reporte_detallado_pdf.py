@@ -53,8 +53,24 @@ class ReporteDetalladoPDF:
         estilos.add(ParagraphStyle(name='RightAlign', alignment=TA_RIGHT))
         elementos = []
 
-        fecha_ini_str = filtros.get('fecha_inicio', datetime.now()).strftime('%Y-%m-%d') if filtros.get('fecha_inicio') else "Inicio"
-        fecha_fin_str = filtros.get('fecha_fin', 'N/A').strftime('%Y-%m-%d') if filtros.get('fecha_fin') else "Fin"
+        # Handle both datetime objects and strings for dates
+        fecha_inicio = filtros.get('fecha_inicio')
+        if fecha_inicio:
+            if isinstance(fecha_inicio, str):
+                fecha_ini_str = fecha_inicio
+            else:
+                fecha_ini_str = fecha_inicio.strftime('%Y-%m-%d')
+        else:
+            fecha_ini_str = "Inicio"
+        
+        fecha_fin = filtros.get('fecha_fin')
+        if fecha_fin:
+            if isinstance(fecha_fin, str):
+                fecha_fin_str = fecha_fin
+            else:
+                fecha_fin_str = fecha_fin.strftime('%Y-%m-%d')
+        else:
+            fecha_fin_str = "Fin"
 
         elementos.append(Paragraph("REPORTE DE ALQUILER EQUIPOS PESADOS", estilos['h1']))
         elementos.append(Paragraph(f"Cliente: {cliente_nombre}", estilos['Normal']))
