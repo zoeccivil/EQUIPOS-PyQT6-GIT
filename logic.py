@@ -5,7 +5,7 @@ import logging
 import calendar
 from datetime import datetime, date
 import uuid # Asegúrate de que esta línea esté al inicio de tu archivo logic.py
-
+from typing import List # <--- AÑADIDO
 
 # Configura logging para archivo y consola
 logging.basicConfig(
@@ -1673,6 +1673,30 @@ class DatabaseManager:
         """
         return self.fetchone("SELECT * FROM equipos_entidades WHERE id = ?", (entidad_id,))
 
+    # --- NUEVA FUNCION AÑADIDA ---
+    def obtener_columnas_de_tabla(self, nombre_tabla: str) -> List[str]:
+        """
+        Obtiene la lista de nombres de columnas para una tabla específica.
+        Utiliza PRAGMA_table_info de SQLite.
+        
+        Args:
+            nombre_tabla: El nombre de la tabla (ej. "proyectos")
+            
+        Returns:
+            Una lista de strings con los nombres de las columnas.
+        """
+        try:
+            # PRAGMA_table_info es la forma estándar de SQLite de introspectar una tabla
+            columnas_info = self.fetchall(f"PRAGMA table_info({nombre_tabla})")
+            
+            # El nombre de la columna está en el campo 'name' de los resultados
+            nombres = [info['name'] for info in columnas_info]
+            logger.debug(f"Columnas para {nombre_tabla}: {nombres}")
+            return nombres
+        except Exception as e:
+            logger.error(f"Error obteniendo columnas para {nombre_tabla}: {e}")
+            return []
+
 # --- CLASES DE DATOS (MODELOS) ---
 class Transaccion:
     def __init__(self, **kwargs):
@@ -1710,5 +1734,3 @@ class Proyecto:
         self.nombre = datos_proyecto['nombre']
         self.moneda = datos_proyecto['moneda']
         return True
-    
-       

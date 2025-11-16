@@ -10,6 +10,8 @@ from datetime import date, datetime
 import requests
 import json
 import uuid
+import time  # Para las pausas (sleep)
+import random # Para el factor aleatorio (jitter)
 
 from app.repo.base_repository import BaseRepository
 
@@ -42,8 +44,8 @@ class FirestoreRepository(BaseRepository):
         self.email = email
         self.password = password
         self.api_key = api_key
-        self.id_token = None
-        self.refresh_token = None
+        self.id_token: Optional[str] = None
+        self.refresh_token: Optional[str] = None
         self.base_url = FIRESTORE_BASE_URL.format(project_id=project_id)
         
         # Authenticate on initialization
@@ -74,15 +76,19 @@ class FirestoreRepository(BaseRepository):
             if not self.id_token:
                 raise ConnectionError("No se recibió token de autenticación")
             
-            logger.info(f"Autenticación exitosa para {self.email} en proyecto {self.project_id}")
+            logger.info(
+                "Autenticación exitosa para %s en proyecto %s",
+                self.email,
+                self.project_id,
+            )
             
         except requests.exceptions.RequestException as e:
             error_msg = f"Error de autenticación Firestore: {e}"
-            if hasattr(e, 'response') and e.response is not None:
+            if getattr(e, "response", None) is not None:
                 try:
                     error_detail = e.response.json()
                     error_msg += f" - {error_detail}"
-                except:
+                except Exception:
                     pass
             logger.error(error_msg)
             raise ConnectionError(error_msg)
@@ -93,42 +99,102 @@ class FirestoreRepository(BaseRepository):
             self._authenticate()
         return {
             "Authorization": f"Bearer {self.id_token}",
-            "Content-Type": "application/json"
+            "Content-Type": "application/json",
         }
     
-    def _firestore_request(self, method: str, path: str, data: Optional[Dict] = None) -> Any:
+    def _firestore_request(
+        self, method: str, path: str, data: Optional[Dict] = None
+    ) -> Any:
         """
-        Make a request to Firestore REST API.
-        
-        Args:
-            method: HTTP method (GET, POST, PATCH, DELETE)
-            path: Path after base URL (e.g., "proyectos/doc1")
-            data: Optional data for POST/PATCH requests
-        
-        Returns:
-            Response JSON data
+        Make a request to Firestore REST API, with retry logic for 429 errors.
         """
         url = f"{self.base_url}/{path}"
         headers = self._get_headers()
-        
-        try:
-            if method == "GET":
-                response = requests.get(url, headers=headers)
-            elif method == "POST":
-                response = requests.post(url, headers=headers, json=data)
-            elif method == "PATCH":
-                response = requests.patch(url, headers=headers, json=data)
-            elif method == "DELETE":
-                response = requests.delete(url, headers=headers)
-            else:
-                raise ValueError(f"Método HTTP no soportado: {method}")
-            
-            response.raise_for_status()
-            return response.json() if response.content else {}
-            
-        except requests.exceptions.RequestException as e:
-            logger.error(f"Error en request Firestore {method} {path}: {e}")
-            raise
+
+        # --- Lógica de Reintentos ---
+        MAX_RETRIES = 7  # Máximo 7 intentos
+        base_wait = 1.0  # Empezar con 1.0 segundos de espera base
+        # ---------------------------
+
+        for attempt in range(MAX_RETRIES):
+            try:
+                if method == "GET":
+                    response = requests.get(url, headers=headers)
+                elif method == "POST":
+                    response = requests.post(url, headers=headers, json=data)
+                elif method == "PATCH":
+                    response = requests.patch(url, headers=headers, json=data)
+                elif method == "DELETE":
+                    response = requests.delete(url, headers=headers)
+                else:
+                    raise ValueError(f"Método HTTP no soportado: {method}")
+
+                # Si la solicitud es exitosa (no 4xx/5xx), esto no lanzará error
+                response.raise_for_status()
+                
+                # --- ¡ÉXITO! ---
+                # Retorna la respuesta JSON y sal del bucle
+                return response.json() if response.content else {}
+
+            except requests.exceptions.HTTPError as e:
+                status = e.response.status_code if e.response is not None else None
+
+                # --- LÓGICA DE MANEJO DE 429 ---
+                # ¿Es un error 429 y aún nos quedan reintentos?
+                if status == 429 and attempt < MAX_RETRIES - 1:
+                    
+                    # Calcular espera exponencial: 1s, 2s, 4s, 8s...
+                    # + un pequeño tiempo aleatorio (jitter) para evitar colisiones
+                    wait_time = (base_wait * (2 ** attempt)) + random.uniform(0.1, 0.5)
+                    
+                    logger.warning(
+                        "Recibido HTTP 429 (Too Many Requests) en intento %s/%s para %s %s. "
+                        "Reintentando en %.2f segundos...",
+                        attempt + 1,
+                        MAX_RETRIES,
+                        method,
+                        path,
+                        wait_time,
+                    )
+                    # Esperar antes del siguiente intento
+                    time.sleep(wait_time)
+                    
+                    # Continuar con el siguiente intento del bucle 'for'
+                    continue 
+                
+                else:
+                    # Es un error diferente (ej. 404, 500) O
+                    # Es un 429 pero ya gastamos todos los reintentos
+                    logger.error(
+                        "Error en request Firestore %s %s (intento %s/%s): HTTP %s %s",
+                        method,
+                        path,
+                        attempt + 1,
+                        MAX_RETRIES,
+                        status,
+                        e,
+                    )
+                    # Lanzar el error original, hemos fallado
+                    raise
+                # --- FIN LÓGICA 429 ---
+
+            except requests.exceptions.RequestException as e:
+                # Error de conexión, no HTTP (ej. DNS, timeout)
+                logger.error(
+                    "Error de conexión en request Firestore %s %s (intento %s/%s): %s",
+                    method,
+                    path,
+                    attempt + 1,
+                    MAX_RETRIES,
+                    e
+                )
+                # Si es un error de conexión, también lo lanzamos (o podríamos reintentar)
+                raise
+
+        # Si el bucle termina sin un 'return' o 'raise', significa que falló
+        raise Exception(
+            f"Fallo en _firestore_request para {method} {path} después de {MAX_RETRIES} intentos."
+        )
     
     def _convert_firestore_doc(self, doc: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -140,11 +206,10 @@ class FirestoreRepository(BaseRepository):
         if not doc or "fields" not in doc:
             return {}
         
-        result = {}
+        result: Dict[str, Any] = {}
         fields = doc["fields"]
         
         for key, value_obj in fields.items():
-            # Extract value based on type
             if "stringValue" in value_obj:
                 result[key] = value_obj["stringValue"]
             elif "integerValue" in value_obj:
@@ -158,6 +223,7 @@ class FirestoreRepository(BaseRepository):
             elif "nullValue" in value_obj:
                 result[key] = None
             else:
+                # tipos más complejos (map, array, etc.) => se devuelven crudos
                 result[key] = value_obj
         
         # Add document ID if present
@@ -174,7 +240,7 @@ class FirestoreRepository(BaseRepository):
         Converts: {"field": "value"}
         To: {"fields": {"field": {"stringValue": "value"}}}
         """
-        fields = {}
+        fields: Dict[str, Any] = {}
         
         for key, value in data.items():
             if value is None:
@@ -203,7 +269,7 @@ class FirestoreRepository(BaseRepository):
             documents = response.get("documents", [])
             return [self._convert_firestore_doc(doc) for doc in documents]
         except Exception as e:
-            logger.error(f"Error obteniendo proyectos: {e}")
+            logger.error("Error obteniendo proyectos: %s", e)
             return []
     
     def obtener_proyecto_por_id(self, proyecto_id: int) -> Optional[Dict[str, Any]]:
@@ -212,31 +278,40 @@ class FirestoreRepository(BaseRepository):
             response = self._firestore_request("GET", f"proyectos/{proyecto_id}")
             return self._convert_firestore_doc(response)
         except requests.exceptions.HTTPError as e:
-            if e.response.status_code == 404:
+            if e.response is not None and e.response.status_code == 404:
                 return None
             raise
     
-    def crear_proyecto(self, nombre: str, descripcion: str = "", 
-                       moneda: str = "RD$", cuenta_principal: str = "") -> int:
+    def crear_proyecto(
+        self,
+        nombre: str,
+        descripcion: str = "",
+        moneda: str = "RD$",
+        cuenta_principal: str = "",
+    ) -> int:
         """Crear un nuevo proyecto."""
-        # Generate ID (in production, use auto-increment or UUID)
         proyectos = self.obtener_proyectos()
         nuevo_id = max([p.get("id", 0) for p in proyectos], default=0) + 1
         
-        data = self._convert_to_firestore_fields({
-            "id": nuevo_id,
-            "nombre": nombre,
-            "descripcion": descripcion,
-            "moneda": moneda,
-            "cuenta_principal": cuenta_principal
-        })
+        data = self._convert_to_firestore_fields(
+            {
+                "id": nuevo_id,
+                "nombre": nombre,
+                "descripcion": descripcion,
+                "moneda": moneda,
+                "cuenta_principal": cuenta_principal,
+            }
+        )
         
         self._firestore_request("PATCH", f"proyectos/{nuevo_id}", data)
         return nuevo_id
     
     # --- EQUIPOS ---
-    def obtener_equipos(self, proyecto_id: Optional[int] = None, 
-                        activo: Optional[bool] = None) -> List[Dict[str, Any]]:
+    def obtener_equipos(
+        self,
+        proyecto_id: Optional[int] = None,
+        activo: Optional[bool] = None,
+    ) -> List[Dict[str, Any]]:
         """Obtener equipos, opcionalmente filtrados por proyecto y estado activo."""
         try:
             response = self._firestore_request("GET", "equipos")
@@ -245,13 +320,17 @@ class FirestoreRepository(BaseRepository):
             
             # Apply filters
             if proyecto_id is not None:
-                equipos = [e for e in equipos if e.get("proyecto_id") == proyecto_id]
+                equipos = [
+                    e for e in equipos if e.get("proyecto_id") == proyecto_id
+                ]
             if activo is not None:
-                equipos = [e for e in equipos if e.get("activo", True) == activo]
+                equipos = [
+                    e for e in equipos if e.get("activo", True) == activo
+                ]
             
             return equipos
         except Exception as e:
-            logger.error(f"Error obteniendo equipos: {e}")
+            logger.error("Error obteniendo equipos: %s", e)
             return []
     
     def obtener_equipo_por_id(self, equipo_id: int) -> Optional[Dict[str, Any]]:
@@ -260,26 +339,35 @@ class FirestoreRepository(BaseRepository):
             response = self._firestore_request("GET", f"equipos/{equipo_id}")
             return self._convert_firestore_doc(response)
         except requests.exceptions.HTTPError as e:
-            if e.response.status_code == 404:
+            if e.response is not None and e.response.status_code == 404:
                 return None
             raise
     
-    def crear_equipo(self, proyecto_id: int, nombre: str, marca: str = "",
-                     modelo: str = "", categoria: str = "", equipo: str = "") -> int:
+    def crear_equipo(
+        self,
+        proyecto_id: int,
+        nombre: str,
+        marca: str = "",
+        modelo: str = "",
+        categoria: str = "",
+        equipo: str = "",
+    ) -> int:
         """Crear un nuevo equipo."""
         equipos = self.obtener_equipos()
         nuevo_id = max([e.get("id", 0) for e in equipos], default=0) + 1
         
-        data = self._convert_to_firestore_fields({
-            "id": nuevo_id,
-            "proyecto_id": proyecto_id,
-            "nombre": nombre,
-            "marca": marca,
-            "modelo": modelo,
-            "categoria": categoria,
-            "equipo": equipo,
-            "activo": True
-        })
+        data = self._convert_to_firestore_fields(
+            {
+                "id": nuevo_id,
+                "proyecto_id": proyecto_id,
+                "nombre": nombre,
+                "marca": marca,
+                "modelo": modelo,
+                "categoria": categoria,
+                "equipo": equipo,
+                "activo": True,
+            }
+        )
         
         self._firestore_request("PATCH", f"equipos/{nuevo_id}", data)
         return nuevo_id
@@ -288,11 +376,15 @@ class FirestoreRepository(BaseRepository):
         """Actualizar datos de un equipo."""
         try:
             data = self._convert_to_firestore_fields(datos)
-            self._firestore_request("PATCH", f"equipos/{equipo_id}?updateMask.fieldPaths=" + 
-                                   ",".join(datos.keys()), data)
+            field_mask = ",".join(datos.keys())
+            self._firestore_request(
+                "PATCH",
+                f"equipos/{equipo_id}?updateMask.fieldPaths={field_mask}",
+                data,
+            )
             return True
         except Exception as e:
-            logger.error(f"Error actualizando equipo {equipo_id}: {e}")
+            logger.error("Error actualizando equipo %s: %s", equipo_id, e)
             return False
     
     # --- CLIENTES ---
@@ -303,7 +395,7 @@ class FirestoreRepository(BaseRepository):
             documents = response.get("documents", [])
             return [self._convert_firestore_doc(doc) for doc in documents]
         except Exception as e:
-            logger.error(f"Error obteniendo clientes: {e}")
+            logger.error("Error obteniendo clientes: %s", e)
             return []
     
     def obtener_cliente_por_id(self, cliente_id: int) -> Optional[Dict[str, Any]]:
@@ -312,7 +404,7 @@ class FirestoreRepository(BaseRepository):
             response = self._firestore_request("GET", f"clientes/{cliente_id}")
             return self._convert_firestore_doc(response)
         except requests.exceptions.HTTPError as e:
-            if e.response.status_code == 404:
+            if e.response is not None and e.response.status_code == 404:
                 return None
             raise
     
@@ -321,7 +413,7 @@ class FirestoreRepository(BaseRepository):
         clientes = self.obtener_clientes()
         nuevo_id = max([c.get("id", 0) for c in clientes], default=0) + 1
         
-        datos = {"id": nuevo_id, "nombre": nombre}
+        datos: Dict[str, Any] = {"id": nuevo_id, "nombre": nombre}
         datos.update(kwargs)
         
         data = self._convert_to_firestore_fields(datos)
@@ -336,7 +428,7 @@ class FirestoreRepository(BaseRepository):
             documents = response.get("documents", [])
             return [self._convert_firestore_doc(doc) for doc in documents]
         except Exception as e:
-            logger.error(f"Error obteniendo operadores: {e}")
+            logger.error("Error obteniendo operadores: %s", e)
             return []
     
     def obtener_operador_por_id(self, operador_id: int) -> Optional[Dict[str, Any]]:
@@ -345,7 +437,7 @@ class FirestoreRepository(BaseRepository):
             response = self._firestore_request("GET", f"operadores/{operador_id}")
             return self._convert_firestore_doc(response)
         except requests.exceptions.HTTPError as e:
-            if e.response.status_code == 404:
+            if e.response is not None and e.response.status_code == 404:
                 return None
             raise
     
@@ -354,7 +446,7 @@ class FirestoreRepository(BaseRepository):
         operadores = self.obtener_operadores()
         nuevo_id = max([o.get("id", 0) for o in operadores], default=0) + 1
         
-        datos = {"id": nuevo_id, "nombre": nombre}
+        datos: Dict[str, Any] = {"id": nuevo_id, "nombre": nombre}
         datos.update(kwargs)
         
         data = self._convert_to_firestore_fields(datos)
@@ -362,29 +454,37 @@ class FirestoreRepository(BaseRepository):
         return nuevo_id
     
     # --- ALQUILERES ---
-    def obtener_alquileres(self, proyecto_id: Optional[int] = None,
-                          fecha_inicio: Optional[date] = None,
-                          fecha_fin: Optional[date] = None,
-                          cliente_id: Optional[int] = None,
-                          equipo_id: Optional[int] = None) -> List[Dict[str, Any]]:
+    def obtener_alquileres(
+        self,
+        proyecto_id: Optional[int] = None,
+        fecha_inicio: Optional[date] = None,
+        fecha_fin: Optional[date] = None,
+        cliente_id: Optional[int] = None,
+        equipo_id: Optional[int] = None,
+    ) -> List[Dict[str, Any]]:
         """Obtener alquileres con filtros opcionales."""
         try:
             response = self._firestore_request("GET", "alquileres")
             documents = response.get("documents", [])
             alquileres = [self._convert_firestore_doc(doc) for doc in documents]
             
-            # Apply filters (basic client-side filtering)
             if proyecto_id is not None:
-                alquileres = [a for a in alquileres if a.get("proyecto_id") == proyecto_id]
+                alquileres = [
+                    a for a in alquileres if a.get("proyecto_id") == proyecto_id
+                ]
             if cliente_id is not None:
-                alquileres = [a for a in alquileres if a.get("cliente_id") == cliente_id]
+                alquileres = [
+                    a for a in alquileres if a.get("cliente_id") == cliente_id
+                ]
             if equipo_id is not None:
-                alquileres = [a for a in alquileres if a.get("equipo_id") == equipo_id]
-            # Date filtering would require parsing ISO dates
+                alquileres = [
+                    a for a in alquileres if a.get("equipo_id") == equipo_id
+                ]
+            # Date filtering pending (parse ISO timestamps)
             
             return alquileres
         except Exception as e:
-            logger.error(f"Error obteniendo alquileres: {e}")
+            logger.error("Error obteniendo alquileres: %s", e)
             return []
     
     def obtener_alquiler_por_id(self, alquiler_id: str) -> Optional[Dict[str, Any]]:
@@ -393,13 +493,12 @@ class FirestoreRepository(BaseRepository):
             response = self._firestore_request("GET", f"alquileres/{alquiler_id}")
             return self._convert_firestore_doc(response)
         except requests.exceptions.HTTPError as e:
-            if e.response.status_code == 404:
+            if e.response is not None and e.response.status_code == 404:
                 return None
             raise
     
     def crear_alquiler(self, datos: Dict[str, Any]) -> str:
         """Crear un nuevo alquiler. Retorna el ID del alquiler creado."""
-        import uuid
         alquiler_id = datos.get("id", str(uuid.uuid4()))
         
         data = self._convert_to_firestore_fields(datos)
@@ -410,11 +509,15 @@ class FirestoreRepository(BaseRepository):
         """Actualizar datos de un alquiler."""
         try:
             data = self._convert_to_firestore_fields(datos)
-            self._firestore_request("PATCH", f"alquileres/{alquiler_id}?updateMask.fieldPaths=" + 
-                                   ",".join(datos.keys()), data)
+            field_mask = ",".join(datos.keys())
+            self._firestore_request(
+                "PATCH",
+                f"alquileres/{alquiler_id}?updateMask.fieldPaths={field_mask}",
+                data,
+            )
             return True
         except Exception as e:
-            logger.error(f"Error actualizando alquiler {alquiler_id}: {e}")
+            logger.error("Error actualizando alquiler %s: %s", alquiler_id, e)
             return False
     
     def eliminar_alquiler(self, alquiler_id: str) -> bool:
@@ -423,14 +526,17 @@ class FirestoreRepository(BaseRepository):
             self._firestore_request("DELETE", f"alquileres/{alquiler_id}")
             return True
         except Exception as e:
-            logger.error(f"Error eliminando alquiler {alquiler_id}: {e}")
+            logger.error("Error eliminando alquiler %s: %s", alquiler_id, e)
             return False
     
     # --- TRANSACCIONES ---
-    def obtener_transacciones(self, proyecto_id: Optional[int] = None,
-                             tipo: Optional[str] = None,
-                             fecha_inicio: Optional[date] = None,
-                             fecha_fin: Optional[date] = None) -> List[Dict[str, Any]]:
+    def obtener_transacciones(
+        self,
+        proyecto_id: Optional[int] = None,
+        tipo: Optional[str] = None,
+        fecha_inicio: Optional[date] = None,
+        fecha_fin: Optional[date] = None,
+    ) -> List[Dict[str, Any]]:
         """Obtener transacciones con filtros opcionales."""
         try:
             response = self._firestore_request("GET", "transacciones")
@@ -438,18 +544,19 @@ class FirestoreRepository(BaseRepository):
             transacciones = [self._convert_firestore_doc(doc) for doc in documents]
             
             if proyecto_id is not None:
-                transacciones = [t for t in transacciones if t.get("proyecto_id") == proyecto_id]
+                transacciones = [
+                    t for t in transacciones if t.get("proyecto_id") == proyecto_id
+                ]
             if tipo is not None:
                 transacciones = [t for t in transacciones if t.get("tipo") == tipo]
             
             return transacciones
         except Exception as e:
-            logger.error(f"Error obteniendo transacciones: {e}")
+            logger.error("Error obteniendo transacciones: %s", e)
             return []
     
     def crear_transaccion(self, datos: Dict[str, Any]) -> str:
         """Crear una nueva transacción."""
-        import uuid
         transaccion_id = datos.get("id", str(uuid.uuid4()))
         
         data = self._convert_to_firestore_fields(datos)
@@ -457,8 +564,11 @@ class FirestoreRepository(BaseRepository):
         return transaccion_id
     
     # --- PAGOS ---
-    def obtener_pagos(self, proyecto_id: Optional[int] = None,
-                     operador_id: Optional[int] = None) -> List[Dict[str, Any]]:
+    def obtener_pagos(
+        self,
+        proyecto_id: Optional[int] = None,
+        operador_id: Optional[int] = None,
+    ) -> List[Dict[str, Any]]:
         """Obtener pagos con filtros opcionales."""
         try:
             response = self._firestore_request("GET", "pagos")
@@ -466,13 +576,17 @@ class FirestoreRepository(BaseRepository):
             pagos = [self._convert_firestore_doc(doc) for doc in documents]
             
             if proyecto_id is not None:
-                pagos = [p for p in pagos if p.get("proyecto_id") == proyecto_id]
+                pagos = [
+                    p for p in pagos if p.get("proyecto_id") == proyecto_id
+                ]
             if operador_id is not None:
-                pagos = [p for p in pagos if p.get("operador_id") == operador_id]
+                pagos = [
+                    p for p in pagos if p.get("operador_id") == operador_id
+                ]
             
             return pagos
         except Exception as e:
-            logger.error(f"Error obteniendo pagos: {e}")
+            logger.error("Error obteniendo pagos: %s", e)
             return []
     
     def crear_pago(self, datos: Dict[str, Any]) -> int:
@@ -494,11 +608,13 @@ class FirestoreRepository(BaseRepository):
             mantenimientos = [self._convert_firestore_doc(doc) for doc in documents]
             
             if equipo_id is not None:
-                mantenimientos = [m for m in mantenimientos if m.get("equipo_id") == equipo_id]
+                mantenimientos = [
+                    m for m in mantenimientos if m.get("equipo_id") == equipo_id
+                ]
             
             return mantenimientos
         except Exception as e:
-            logger.error(f"Error obteniendo mantenimientos: {e}")
+            logger.error("Error obteniendo mantenimientos: %s", e)
             return []
     
     def crear_mantenimiento(self, datos: Dict[str, Any]) -> int:
@@ -519,7 +635,7 @@ class FirestoreRepository(BaseRepository):
             documents = response.get("documents", [])
             return [self._convert_firestore_doc(doc) for doc in documents]
         except Exception as e:
-            logger.error(f"Error obteniendo categorías: {e}")
+            logger.error("Error obteniendo categorías: %s", e)
             return []
     
     # --- CUENTAS ---
@@ -530,7 +646,7 @@ class FirestoreRepository(BaseRepository):
             documents = response.get("documents", [])
             return [self._convert_firestore_doc(doc) for doc in documents]
         except Exception as e:
-            logger.error(f"Error obteniendo cuentas: {e}")
+            logger.error("Error obteniendo cuentas: %s", e)
             return []
     
     # --- GENERIC TABLE ACCESS ---
@@ -540,8 +656,8 @@ class FirestoreRepository(BaseRepository):
         Handles pagination to retrieve ALL documents.
         """
         try:
-            all_documents = []
-            page_token = None
+            all_documents: List[Dict[str, Any]] = []
+            page_token: Optional[str] = None
             page_size = 1000  # Maximum allowed by Firestore REST API
             
             while True:
@@ -554,21 +670,29 @@ class FirestoreRepository(BaseRepository):
                 response = self._firestore_request("GET", f"{url_path}{params}")
                 documents = response.get("documents", [])
                 
-                # Convert and add to results
-                all_documents.extend([self._convert_firestore_doc(doc) for doc in documents])
+                all_documents.extend(
+                    [self._convert_firestore_doc(doc) for doc in documents]
+                )
                 
-                # Check if there are more pages
                 page_token = response.get("nextPageToken")
                 if not page_token:
                     break  # No more pages
                 
-                logger.debug(f"Fetching next page for {nombre_tabla} (total so far: {len(all_documents)})")
+                logger.debug(
+                    "Fetching next page for %s (total so far: %s)",
+                    nombre_tabla,
+                    len(all_documents),
+                )
             
-            logger.info(f"Retrieved {len(all_documents)} total documents from {nombre_tabla}")
+            logger.info(
+                "Retrieved %s total documents from %s",
+                len(all_documents),
+                nombre_tabla,
+            )
             return all_documents
             
         except Exception as e:
-            logger.error(f"Error obteniendo tabla {nombre_tabla}: {e}")
+            logger.error("Error obteniendo tabla %s: %s", nombre_tabla, e)
             return []
     
     def insertar_registro_generico(self, nombre_tabla: str, datos: Dict[str, Any]) -> bool:
@@ -576,29 +700,56 @@ class FirestoreRepository(BaseRepository):
         Insertar un registro en una colección genérica.
         """
         try:
-            # Use ID if present, otherwise generate one
             doc_id = datos.get("id", str(uuid.uuid4()))
             data = self._convert_to_firestore_fields(datos)
             self._firestore_request("PATCH", f"{nombre_tabla}/{doc_id}", data)
             return True
         except Exception as e:
-            logger.warning(f"Error insertando en tabla {nombre_tabla}: {e}")
+            logger.warning("Error insertando en tabla %s: %s", nombre_tabla, e)
             return False
     
     # --- HEALTH CHECK ---
     def verificar_conexion(self) -> bool:
-        """Verificar que la conexión al backend está activa."""
+        """
+        Verificar que la conexión al backend está activa.
+
+        Regla:
+        - 2xx: OK -> True
+        - 401/403: problema real de credenciales/permisos -> False
+        - 429: Too Many Requests (rate limit) -> se considera conexión válida pero limitada -> True
+        - Otros errores: False
+        """
         try:
-            # Try to get a simple collection
+            # Un GET simple a 'proyectos' como health check.
             self._firestore_request("GET", "proyectos")
             return True
+        except requests.exceptions.HTTPError as e:
+            status = e.response.status_code if e.response is not None else None
+            if status in (401, 403):
+                logger.error(
+                    "Error verificando conexión Firestore (credenciales/permisos) HTTP %s: %s",
+                    status,
+                    e,
+                )
+                return False
+            if status == 429:
+                logger.warning(
+                    "Firestore respondió 429 Too Many Requests durante verificar_conexion; "
+                    "se tratará como conexión válida pero temporalmente limitada."
+                )
+                return True
+            logger.error(
+                "Error verificando conexión Firestore (HTTP %s): %s",
+                status,
+                e,
+            )
+            return False
         except Exception as e:
-            logger.error(f"Error verificando conexión Firestore: {e}")
+            logger.error("Error verificando conexión Firestore: %s", e)
             return False
     
     def cerrar(self) -> None:
         """Cerrar conexiones y liberar recursos."""
-        # REST API doesn't require explicit cleanup
         logger.info("Cerrando conexión Firestore")
         self.id_token = None
         self.refresh_token = None

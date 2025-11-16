@@ -2,6 +2,7 @@ import sys
 import os
 import logging
 import traceback
+import time  # Import consolidado
 from PyQt6.QtWidgets import QApplication, QFileDialog, QMessageBox, QDialog
 
 from logic import DatabaseManager
@@ -65,82 +66,112 @@ def excepthook(exc_type, exc_value, exc_tb):
     sys.exit(1)
 
 
+# En: main_qt.py
+# REEMPLAZA la función sync_from_firestore_to_sqlite completa
+
 def sync_from_firestore_to_sqlite(firestore_repo, sqlite_db_manager):
     """
-    Sync all data from Firestore to the temporary SQLite database.
-    This allows tabs to read data from SQLite while Firestore is the primary storage.
+    Sincroniza las 8 tablas críticas definidas por el usuario,
+    incluyendo transacciones, con un delay de 0.3s.
     """
-    logger.info("Sincronizando desde Firestore a SQLite temporal...")
+    logger.info("Sincronizando 8 tablas CRÍTICAS (plan de usuario)...")
     
-    # List of all tables to sync
-    tables_to_sync = [
-        'proyectos', 'categorias', 'subcategorias', 'cuentas',
-        'equipos', 'equipos_entidades', 'equipos_mantenimiento',
-        'transacciones', 'equipos_alquiler_meta',
-        'pagos', 'mantenimientos',
-        'companies', 'currencies', 'third_parties', 'settings',
-        'invoices', 'invoice_items', 'quotations', 'quotation_items',
-        'tax_calculations', 'tax_calculation_details',
-        'proyecto_categorias', 'proyecto_cuentas', 'proyecto_subcategorias',
-        'transferencias', 'presupuestos', 'operadores'
+    # --- Tu Lista de 8 Tablas Críticas ---
+    tablas_esenciales_sync = [
+        'proyectos', 
+        'categorias', 
+        'subcategorias',
+        'cuentas', 
+        'equipos', 
+        'equipos_entidades',
+        'transacciones',            # <-- Tabla grande añadida
+        'equipos_alquiler_meta'     # <-- Tabla grande añadida
     ]
+    
+    logger.warning(
+        f"Omitiendo 19 tablas secundarias para Carga Bajo Demanda."
+    )
     
     synced_count = 0
     failed_tables = []
     
-    for tabla in tables_to_sync:
+    for tabla in tablas_esenciales_sync:
         try:
-            # Get all records from Firestore
-            registros = firestore_repo.obtener_tabla_completa(tabla)
+            logger.info(f"Sincronizando tabla esencial: {tabla}...")
             
-            if registros:
-                # Insert each record into SQLite
-                for registro in registros:
+            columnas_sqlite = sqlite_db_manager.obtener_columnas_de_tabla(tabla)
+            if not columnas_sqlite:
+                logger.warning(f"No se pudieron obtener columnas para la tabla SQLite '{tabla}'. Omitiendo.")
+                continue
+
+            mapa_columnas = {}
+            for col_sqlite in columnas_sqlite:
+                partes = col_sqlite.split('_')
+                col_camel = partes[0] + ''.join(p.capitalize() for p in partes[1:])
+                mapa_columnas[col_sqlite] = [col_sqlite, col_camel]
+
+            # Esta llamada puede tardar mucho para 'transacciones'
+            registros_fs = firestore_repo.obtener_tabla_completa(tabla)
+            
+            if registros_fs:
+                registros_insertados_count = 0
+                for registro_fs_raw in registros_fs:
                     try:
-                        # Remove Firestore internal fields
-                        registro_limpio = {k: v for k, v in registro.items() if not k.startswith('_firestore')}
+                        registro_fs_limpio = {k: v for k, v in registro_fs_raw.items() if not k.startswith('_firestore')}
+                        datos_a_insertar = {}
                         
-                        # Build INSERT statement dynamically
-                        columns = list(registro_limpio.keys())
+                        for col_sqlite, posibles_nombres_fs in mapa_columnas.items():
+                            if posibles_nombres_fs[0] in registro_fs_limpio:
+                                datos_a_insertar[col_sqlite] = registro_fs_limpio[posibles_nombres_fs[0]]
+                            elif posibles_nombres_fs[1] in registro_fs_limpio:
+                                datos_a_insertar[col_sqlite] = registro_fs_limpio[posibles_nombres_fs[1]]
+                        
+                        if not datos_a_insertar:
+                            continue
+
+                        columns = list(datos_a_insertar.keys())
                         placeholders = ', '.join(['?' for _ in columns])
                         column_names = ', '.join(columns)
-                        
                         query = f"INSERT OR REPLACE INTO {tabla} ({column_names}) VALUES ({placeholders})"
                         
-                        # Ensure proper type conversion for SQLite
                         values = []
                         for col in columns:
-                            val = registro_limpio[col]
-                            # Convert numeric strings back to numbers if needed
-                            if isinstance(val, str) and col.endswith('_id'):
-                                try:
-                                    values.append(int(val))
-                                except (ValueError, TypeError):
-                                    values.append(val)
+                            val = datos_a_insertar[col]
+                            if isinstance(val, str) and (col.endswith('_id') or col == 'id'):
+                                try: values.append(int(val))
+                                except (ValueError, TypeError): values.append(val)
                             else:
                                 values.append(val)
                         
                         sqlite_db_manager.execute(query, values)
+                        registros_insertados_count += 1
                     except Exception as e:
-                        logger.warning(f"Error insertando registro en {tabla}: {e}")
+                        logger.warning(f"Error insertando registro individual en {tabla} (ID: {registro_fs_raw.get('id', 'N/A')}): {e}")
                         continue
                 
-                logger.info(f"✓ Sincronizadas {len(registros)} registros de {tabla}")
-                synced_count += len(registros)
-            else:
-                logger.debug(f"○ Tabla {tabla} vacía, omitida")
+                if registros_insertados_count > 0:
+                    logger.info(f"✓ Sincronizadas e insertadas {registros_insertados_count} / {len(registros_fs)} registros de {tabla}")
+                else:
+                    logger.debug(f"○ Tabla {tabla} vacía, omitida")
+
+                synced_count += registros_insertados_count
                 
+                # --- Tu Pausa de 0.3 segundos ---
+                logger.debug("Esperando 0.3 seg...")
+                time.sleep(0.3) 
+
         except Exception as e:
-            logger.warning(f"✗ Error sincronizando tabla {tabla}: {e}")
+            # Si esto falla con 429 para 'transacciones', tu plan no funcionó
+            logger.error(f"✗ Error fatal sincronizando tabla {tabla}: {e}", exc_info=True)
             failed_tables.append(tabla)
+            time.sleep(0.3)
             continue
     
     if failed_tables:
-        logger.warning(f"Tablas con errores de sincronización: {', '.join(failed_tables)}")
+        logger.warning(f"Tablas esenciales con errores de sincronización: {', '.join(failed_tables)}")
     
-    logger.info(f"Sincronización completada: {synced_count} registros sincronizados")
+    logger.info(f"Sincronización esencial completada: {synced_count} registros sincronizados")
     return synced_count, failed_tables
-
 
 def solicitar_bd_por_dialogo():
     """

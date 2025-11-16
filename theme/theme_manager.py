@@ -11,29 +11,86 @@ from typing import Callable, List, Optional, Dict, Tuple
 
 from PyQt6.QtWidgets import QApplication
 
-# Persistencia en JSON - try both import paths
+# ----------------------------------------------------------------------
+# Persistencia en configuración (AppSettings o similar)
+# ----------------------------------------------------------------------
+# Intentamos primero una API genérica get_value/set_value.
+# Si no existe, usamos AppSettings (get_settings) con wrappers seguros.
 try:
-    from app.core.app_settings import get_value, set_value
+    # Ruta opcional: proyectos que ya tengan helpers directos
+    from app.core.app_settings import get_value, set_value  # type: ignore
 except ImportError:
     try:
+        # Ruta usada en este proyecto
         from app.app_settings import get_settings
-        # Create compatibility wrappers
+
         def get_value(key: str, default: str = "") -> str:
+            """
+            Obtiene un valor desde AppSettings de forma segura, sin tratarlo como dict.
+            """
             settings = get_settings()
-            return settings.get(key, default)
-        
+
+            # 1) Si AppSettings tiene método get(key, default)
+            if hasattr(settings, "get") and callable(getattr(settings, "get")):
+                try:
+                    return settings.get(key, default)
+                except TypeError:
+                    # Por si la firma es get(key) sin default
+                    val = settings.get(key)
+                    return default if val is None else val
+
+            # 2) Si tiene atributo 'data' tipo dict
+            data = getattr(settings, "data", None)
+            if isinstance(data, dict):
+                return data.get(key, default)
+
+            # 3) Si key coincide con un atributo del objeto
+            if hasattr(settings, key):
+                val = getattr(settings, key)
+                return default if val is None else val
+
+            return default
+
         def set_value(key: str, value: str) -> None:
+            """
+            Guarda un valor en AppSettings sin usar asignación tipo dict.
+            """
             settings = get_settings()
-            settings[key] = value
-            settings.save()
+
+            # 1) Si AppSettings tiene método set(key, value)
+            if hasattr(settings, "set") and callable(getattr(settings, "set")):
+                settings.set(key, value)
+                if hasattr(settings, "save") and callable(settings.save):
+                    settings.save()
+                return
+
+            # 2) Si tiene atributo 'data' tipo dict
+            data = getattr(settings, "data", None)
+            if isinstance(data, dict):
+                data[key] = value
+                if hasattr(settings, "save") and callable(settings.save):
+                    settings.save()
+                return
+
+            # 3) Si key coincide con un atributo asignable
+            try:
+                setattr(settings, key, value)
+                if hasattr(settings, "save") and callable(settings.save):
+                    settings.save()
+            except Exception:
+                # Si nada de lo anterior funciona, simplemente no persistimos
+                pass
+
     except ImportError:
-        # Fallback to simple in-memory storage
-        _theme_storage = {}
+        # Fallback a almacenamiento en memoria si no hay AppSettings disponible
+        _theme_storage: Dict[str, str] = {}
+
         def get_value(key: str, default: str = "") -> str:
             return _theme_storage.get(key, default)
-        
+
         def set_value(key: str, value: str) -> None:
             _theme_storage[key] = value
+
 
 # Paquetes posibles para temas (soporta 'theme' y 'themes')
 POSSIBLE_THEME_PACKAGES = ("theme", "themes", "app.ui.theme", "app.ui.themes")
@@ -45,7 +102,7 @@ EXCLUDE_MODULES = {
 }
 
 # Puedes excluir 'auto_theme' si no quieres listarlo
-EXCLUDE_OPTIONAL = {
+EXCLUDE_OPTIONAL: set[str] = {
     # "auto_theme",
 }
 
@@ -110,18 +167,27 @@ def _load_module_from_path(path: str, module_alias: str):
     return None
 
 
-def _collect_theme_info_from_module_object(mod, module_name_hint: str) -> Optional[ThemeInfo]:
+def _collect_theme_info_from_module_object(
+    mod, module_name_hint: str
+) -> Optional[ThemeInfo]:
     try:
         title = getattr(mod, "THEME_NAME", None)
         if not isinstance(title, str) or not title.strip():
-            leaf = module_name_hint.rsplit(".", 1)[-1] if "." in module_name_hint else os.path.splitext(os.path.basename(module_name_hint))[0]
+            if "." in module_name_hint:
+                leaf = module_name_hint.rsplit(".", 1)[-1]
+            else:
+                leaf = os.path.splitext(os.path.basename(module_name_hint))[0]
             title = _humanize(leaf)
 
         apply_name = _discover_theme_apply(mod)
         if not apply_name:
             return None
 
-        theme_id = module_name_hint.rsplit(".", 1)[-1] if "." in module_name_hint else os.path.splitext(os.path.basename(module_name_hint))[0]
+        if "." in module_name_hint:
+            theme_id = module_name_hint.rsplit(".", 1)[-1]
+        else:
+            theme_id = os.path.splitext(os.path.basename(module_name_hint))[0]
+
         return ThemeInfo(
             id=theme_id,
             title=title,
@@ -166,14 +232,16 @@ def _select_themes_package() -> Tuple[str, object]:
                 # Creamos un "paquete virtual" usando el path como módulo container
                 # Devolvemos el paquete name as 'frozen_theme_path' and the path string as second element
                 return "frozen_theme_path", path  # caller will handle this special case
-    raise ImportError(f"No se pudo importar ninguno de los paquetes de temas: {POSSIBLE_THEME_PACKAGES}. Último error: {last_err}")
+    raise ImportError(
+        f"No se pudo importar ninguno de los paquetes de temas: "
+        f"{POSSIBLE_THEME_PACKAGES}. Último error: {last_err}"
+    )
 
 
 def list_themes() -> List[ThemeInfo]:
     """
-    Lista todos los temas detectados en app.ui.theme (o app.ui.themes).
-    Funciona también cuando la aplicación está congelada (PyInstaller) y los módulos no se pueden importar
-    mediante importlib normal. En ese caso escanea archivos .py dentro del bundle.
+    Lista todos los temas detectados (theme/themes/app.ui.theme/app.ui.themes).
+    Soporta también aplicaciones congeladas (PyInstaller).
     """
     themes: List[ThemeInfo] = []
 
@@ -182,9 +250,8 @@ def list_themes() -> List[ThemeInfo]:
     except Exception:
         return []
 
-    # Caso normal: pkg es un módulo con __path__
+    # Caso frozen: pkg es un str con el path al directorio
     if isinstance(pkg, str):
-        # En la rama frozen, pkg contains the directory path
         theme_dir = pkg
         try:
             for fname in sorted(os.listdir(theme_dir)):
@@ -206,7 +273,7 @@ def list_themes() -> List[ThemeInfo]:
         themes.sort(key=lambda t: t.title.lower())
         return themes
 
-    # Normal flow: package module object
+    # Caso normal: package module object
     pkg_path = pkg.__path__
     for m in pkgutil.iter_modules(pkg_path):
         name = m.name
@@ -224,8 +291,7 @@ def list_themes() -> List[ThemeInfo]:
 def _load_module_by_name_or_path(module_name: str, theme_id: str):
     """
     Intenta importar módulo por nombre; si falla, intenta buscar en sys._MEIPASS/app/ui/theme/<theme_id>.py
-    y cargar desde archivo.
-    Devuelve el módulo objeto o None.
+    y cargar desde archivo. Devuelve el módulo objeto o None.
     """
     try:
         return importlib.import_module(module_name)
@@ -251,7 +317,7 @@ def _load_module_by_name_or_path(module_name: str, theme_id: str):
 def apply_theme_by_id(app: QApplication, theme_id: str) -> bool:
     """
     Aplica un tema por id (nombre de archivo sin .py).
-    Prueba ambos prefijos de paquete ('app.ui.theme' y 'app.ui.themes').
+    Prueba ambos prefijos de paquete ('theme', 'themes', 'app.ui.theme', 'app.ui.themes').
     Soporta también cargar módulos desde el bundle cuando la app está congelada.
     """
     for pkg_name in POSSIBLE_THEME_PACKAGES:
@@ -294,8 +360,8 @@ def current_theme_id(default: str = "dim_theme") -> str:
 
 def apply_theme_from_settings(app: QApplication, fallback: str = "dim_theme") -> str:
     """
-    Lee el tema desde licitaciones_config (ui_theme) y lo aplica.
-    Si falla, intenta el fallback. Devuelve el id aplicado (o el que quedó seleccionado).
+    Lee el tema desde la configuración (clave 'ui_theme') y lo aplica.
+    Si falla, intenta el fallback. Devuelve el id aplicado (o el que queda seleccionado).
     """
     tid = current_theme_id(default=fallback)
     ok = apply_theme_by_id(app, tid)
@@ -311,6 +377,9 @@ def apply_theme_from_settings(app: QApplication, fallback: str = "dim_theme") ->
 
 
 def save_theme_selection(theme_id: str) -> None:
+    """
+    Guarda el id de tema seleccionado en la configuración.
+    """
     set_value("ui_theme", theme_id)
 
 

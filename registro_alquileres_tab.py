@@ -1,17 +1,19 @@
-from PyQt6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QGroupBox, QLabel, QComboBox, QDateEdit,
-    QPushButton, QTableWidget, QTableWidgetItem, QMessageBox, QHeaderView, QFileDialog
-)
-from PyQt6.QtCore import QDate, Qt
-from dialogo_alquiler import DialogoAlquiler
-from datetime import datetime, date
-from ventana_gestion_abonos import DialogoRegistroAbono
-import logging
-from PIL import Image
+import sys
 import os
 import shutil
-import sys
-from PyQt6.QtWidgets import QMessageBox
+import logging
+from datetime import datetime, date
+from PIL import Image
+
+from PyQt6.QtWidgets import (
+    QWidget, QVBoxLayout, QHBoxLayout, QGroupBox, QLabel, QComboBox, QDateEdit,
+    QPushButton, QTableWidget, QTableWidgetItem, QMessageBox, QHeaderView, QFileDialog,
+    QApplication  # <-- 1. IMPORT AÑADIDO
+)
+from PyQt6.QtCore import QDate, Qt
+
+from dialogo_alquiler import DialogoAlquiler
+from ventana_gestion_abonos import DialogoRegistroAbono
 from mini_editor_imagen import MiniEditorImagen 
 from DialogoPagoOperador import DialogoPagoOperador
 
@@ -21,23 +23,28 @@ logging.basicConfig(
     format='%(asctime)s %(levelname)s %(message)s'
 )
 
+logger = logging.getLogger(__name__)  # <--- ¡AÑADE ESTA LÍNEA AQUÍ!
+
 class RegistroAlquileresTab(QWidget):
+    # --- 2. __INIT__ MODIFICADO ---
     def __init__(self, db_manager, proyecto_actual, config):
-        super().__init__()
-        self.db = db_manager
-        self.proyecto_actual = proyecto_actual
-        self.config = config
+            super().__init__()
+            self.db = db_manager
+            self.proyecto_actual = proyecto_actual
+            self.config = config
 
-        self.cliente_filtro = "Todos"
-        self.equipo_filtro = "Todos"
-        self.operador_filtro = "Todos"
-        self.clientes_mapa = {}
-        self.equipos_mapa = {}
-        self.operadores_mapa = {}
+            self.cliente_filtro = "Todos"
+            self.equipo_filtro = "Todos"
+            self.operador_filtro = "Todos"
+            self.clientes_mapa = {}
+            self.equipos_mapa = {}
+            self.operadores_mapa = {}
 
-        self._setup_ui()
-        self.poblar_filtros()
-        self.refrescar_tabla()
+            # self.ha_sincronizado_transacciones = False <-- BORRA ESTA LÍNEA
+
+            self._setup_ui()
+            self.poblar_filtros()   # <-- ESTA LÍNEA DEBE ESTAR AQUÍ
+            self.refrescar_tabla()  # <-- ESTA LÍNEA DEBE ESTAR AQUÍ
 
     def _setup_ui(self):
         main_layout = QVBoxLayout(self)
@@ -146,8 +153,126 @@ class RegistroAlquileresTab(QWidget):
         conduce_path = self.table.item(row, 10).text()
         self.abrir_conduce_adjunto(conduce_path)
 
+    # --- 3. NUEVA FUNCIÓN AÑADIDA ---
+    def sincronizar_datos_bajo_demanda(self):
+        """
+        Verifica si las tablas de historial de esta pestaña ya se sincronizaron.
+        Si no, las descarga de Firestore y las inserta en la BD local.
+        """
+        # 1. Si no hay repositorio (modo SQLite legacy) o ya sincronizamos, no hacer nada.
+        if not self.repo or self.ha_sincronizado_transacciones:
+            return
 
+        # 2. Tablas que esta pestaña necesita (las que omitimos en main_qt.py)
+        tablas_a_sincronizar = [
+            "transacciones",
+            "equipos_alquiler_meta",
+            "pagos"
+        ]
+
+        # 3. Mostrar un mensaje al usuario
+        msg_box = QMessageBox(self)
+        msg_box.setWindowTitle("Sincronizando Historial")
+        msg_box.setText("Cargando historial de alquileres y pagos desde la nube... Por favor, espere.")
+        msg_box.setStandardButtons(QMessageBox.StandardButton.NoButton) # Sin botones
+        msg_box.show()
+        QApplication.processEvents() # Forzar que la GUI se actualice
+
+        logger.info(f"Carga Bajo Demanda: Sincronizando {tablas_a_sincronizar}...")
+
+        try:
+            for tabla in tablas_a_sincronizar:
+                logger.info(f"Sincronizando tabla: {tabla}...")
+                
+                # --- Esta lógica es la misma que usamos en main_qt.py ---
+                
+                # A. Obtener columnas de la BD local
+                columnas_sqlite = self.db.obtener_columnas_de_tabla(tabla)
+                if not columnas_sqlite:
+                    logger.warning(f"No se pudieron obtener columnas para la tabla SQLite '{tabla}'. Omitiendo.")
+                    continue
+
+                # B. Crear mapa de mapeo (snake_case -> camelCase)
+                mapa_columnas = {}
+                for col_sqlite in columnas_sqlite:
+                    partes = col_sqlite.split('_')
+                    col_camel = partes[0] + ''.join(p.capitalize() for p in partes[1:])
+                    mapa_columnas[col_sqlite] = [col_sqlite, col_camel]
+                
+                # C. Obtener datos de Firestore (¡con reintentos!)
+                registros_fs = self.repo.obtener_tabla_completa(tabla)
+                
+                if not registros_fs:
+                    logger.info(f"Tabla {tabla} está vacía en Firestore. Omitiendo.")
+                    continue
+                
+                # D. Insertar datos en la BD local (self.db)
+                registros_insertados_count = 0
+                for registro_fs_raw in registros_fs:
+                    try:
+                        registro_fs_limpio = {k: v for k, v in registro_fs_raw.items() if not k.startswith('_firestore')}
+                        datos_a_insertar = {}
+                        
+                        for col_sqlite, posibles_nombres_fs in mapa_columnas.items():
+                            if posibles_nombres_fs[0] in registro_fs_limpio:
+                                datos_a_insertar[col_sqlite] = registro_fs_limpio[posibles_nombres_fs[0]]
+                            elif posibles_nombres_fs[1] in registro_fs_limpio:
+                                datos_a_insertar[col_sqlite] = registro_fs_limpio[posibles_nombres_fs[1]]
+                        
+                        if not datos_a_insertar:
+                            continue
+
+                        columns = list(datos_a_insertar.keys())
+                        placeholders = ', '.join(['?' for _ in columns])
+                        column_names = ', '.join(columns)
+                        query = f"INSERT OR REPLACE INTO {tabla} ({column_names}) VALUES ({placeholders})"
+                        
+                        values = []
+                        for col in columns:
+                            val = datos_a_insertar[col]
+                            if isinstance(val, str) and (col.endswith('_id') or col == 'id'):
+                                try: values.append(int(val))
+                                except (ValueError, TypeError): values.append(val)
+                            else:
+                                values.append(val)
+                        
+                        self.db.execute(query, values)
+                        registros_insertados_count += 1
+
+                    except Exception as e:
+                        logger.warning(f"Error insertando registro individual en {tabla} (ID: {registro_fs_raw.get('id', 'N/A')}): {e}")
+                        continue
+                
+                logger.info(f"✓ Carga Bajo Demanda: {registros_insertados_count} / {len(registros_fs)} registros de {tabla} insertados.")
+                
+                # --- FIN de la lógica copiada ---
+
+            # 4. Marcar la bandera como completada
+            self.ha_sincronizado_transacciones = True
+            logger.info("Carga Bajo Demanda completada.")
+
+        except Exception as e:
+            logger.error(f"Error fatal durante Carga Bajo Demanda: {e}", exc_info=True)
+            QMessageBox.critical(self, "Error de Sincronización", f"No se pudo cargar el historial: {e}")
+        
+        finally:
+            # 5. Cerrar el mensaje de "cargando"
+            msg_box.accept()
+
+        # --- AÑADE ESTE BLOQUE ---
+        # Si acabamos de sincronizar por primera vez,
+        # repoblamos los filtros. Esto actualizará las
+        # fechas de inicio/fin al rango correcto.
+        if self.ha_sincronizado_transacciones:
+            logger.info("Carga Bajo Demanda completada. Repoblando filtros...")
+            self.poblar_filtros()
+            logger.info("Filtros repoblados con las fechas correctas.")
+        # --- FIN DEL BLOQUE AÑADIDO ---
+    # --- 4. refrescar_tabla MODIFICADO ---
     def refrescar_tabla(self):
+        # Primero, asegurar que los datos estén sincronizados
+        #self.sincronizar_datos_bajo_demanda()
+
         self.table.setRowCount(0)
         if not self.proyecto_actual:
             return
@@ -277,53 +402,39 @@ class RegistroAlquileresTab(QWidget):
             else:
                 QMessageBox.warning(self, "Error", "No se pudo eliminar el alquiler.")
 
-
-
     def poblar_filtros(self):
-        if not self.proyecto_actual:
-            return
+            if not self.proyecto_actual:
+                return
+                
+            # --- ¡ASEGÚRATE DE TENER ESTA CORRECCIÓN! ---
+            self.fecha_inicio.blockSignals(True)
+            self.fecha_fin.blockSignals(True)
+            # ---------------------------------------------
+                
+            # (El resto de la función sigue igual...)
+            clientes = self.db.obtener_entidades_equipo_por_tipo(self.proyecto_actual['id'], "Cliente")
+            self.clientes_mapa = {c['nombre']: c['id'] for c in clientes}
+            self.combo_cliente.blockSignals(True)
+            # ... (más código) ...
+            self.combo_equipo.blockSignals(False)
             
-        # La carga de clientes y operadores no cambia
-        clientes = self.db.obtener_entidades_equipo_por_tipo(self.proyecto_actual['id'], "Cliente")
-        self.clientes_mapa = {c['nombre']: c['id'] for c in clientes}
-        self.combo_cliente.blockSignals(True)
-        self.combo_cliente.clear()
-        self.combo_cliente.addItem("Todos")
-        self.combo_cliente.addItems([c['nombre'] for c in clientes])
-        self.combo_cliente.blockSignals(False)
-        
-        operadores = self.db.obtener_entidades_equipo_por_tipo(self.proyecto_actual['id'], "Operador")
-        self.operadores_mapa = {o['nombre']: o['id'] for o in operadores}
-        self.combo_operador.blockSignals(True)
-        self.combo_operador.clear()
-        self.combo_operador.addItem("Todos")
-        self.combo_operador.addItems([o['nombre'] for o in operadores])
-        self.combo_operador.blockSignals(False)
-        
-        # --- LÍNEA MODIFICADA ---
-        # Llamamos a la nueva función que lee de la tabla 'equipos'
-        equipos = self.db.obtener_todos_los_equipos()
-        
-        self.equipos_mapa = {e['nombre']: e['id'] for e in equipos}
-        self.combo_equipo.blockSignals(True)
-        self.combo_equipo.clear()
-        self.combo_equipo.addItem("Todos")
-        self.combo_equipo.addItems([e['nombre'] for e in equipos])
-        self.combo_equipo.blockSignals(False)
-        
-        # El resto de la función para las fechas sigue igual
-        primera_fecha_str = self.db.obtener_fecha_primera_transaccion(self.proyecto_actual['id'])
-        if primera_fecha_str:
-            try:
-                primera_fecha = datetime.strptime(primera_fecha_str, "%Y-%m-%d").date()
-            except Exception:
+            primera_fecha_str = self.db.obtener_fecha_primera_transaccion(self.proyecto_actual['id'])
+            if primera_fecha_str:
+                try:
+                    primera_fecha = datetime.strptime(primera_fecha_str, "%Y-%m-%d").date()
+                except Exception:
+                    primera_fecha = date.today().replace(day=1)
+            else:
                 primera_fecha = date.today().replace(day=1)
-        else:
-            primera_fecha = date.today().replace(day=1)
-        self.fecha_inicio.setDate(QDate(primera_fecha.year, primera_fecha.month, primera_fecha.day))
-        self.fecha_fin.setDate(QDate.currentDate())
+                
+            self.fecha_inicio.setDate(QDate(primera_fecha.year, primera_fecha.month, primera_fecha.day))
+            self.fecha_fin.setDate(QDate.currentDate())
 
-
+            # --- ¡Y ESTA PARTE! ---
+            self.fecha_inicio.blockSignals(False)
+            self.fecha_fin.blockSignals(False)
+            # ---------------------
+        #         
     def obtener_alquiler_seleccionado(self):
         fila_actual = self.table.currentRow()
         if fila_actual < 0:

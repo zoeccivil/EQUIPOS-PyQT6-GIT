@@ -55,12 +55,11 @@ class RepositoryFactory:
             FirestoreRepository instance
         
         Raises:
-            ConnectionError: If authentication fails
+            ConnectionError: If authentication fails or verification fails
             ValueError: If configuration is incomplete
         """
         config = settings.get_firestore_config()
         
-        # Validate configuration
         if not config.get("project_id"):
             raise ValueError("Firestore project_id no configurado")
         if not config.get("email"):
@@ -70,25 +69,32 @@ class RepositoryFactory:
         if not config.get("api_key"):
             raise ValueError("Firestore api_key no configurado")
         
-        logger.info(f"Creando FirestoreRepository para proyecto: {config['project_id']}")
+        logger.info("Creando FirestoreRepository para proyecto: %s", config["project_id"])
         
         try:
             repo = FirestoreRepository(
                 project_id=config["project_id"],
                 email=config["email"],
                 password=config["password"],
-                api_key=config["api_key"]
+                api_key=config["api_key"],
             )
             
-            # Verify connection
+            # Verify connection (verificar_conexion ya distingue 429 vs 401/403)
             if not repo.verificar_conexion():
-                raise ConnectionError("No se pudo verificar la conexión a Firestore")
+                raise ConnectionError(
+                    "No se pudo verificar la conexión a Firestore "
+                    "(credenciales o permisos inválidos)."
+                )
             
             logger.info("FirestoreRepository creado y verificado exitosamente")
             return repo
             
+        except ConnectionError:
+            # Re-lanzar tal cual para que main_qt.py muestre el mensaje
+            logger.error("Error de conexión a Firestore (ConnectionError).")
+            raise
         except Exception as e:
-            logger.error(f"Error creando FirestoreRepository: {e}")
+            logger.error("Error creando FirestoreRepository: %s", e)
             raise ConnectionError(f"Error conectando a Firestore: {e}")
     
     @staticmethod
@@ -106,7 +112,7 @@ class RepositoryFactory:
         if db_path is None:
             db_path = settings.get_sqlite_path()
         
-        logger.info(f"Creando SQLiteRepository con path: {db_path}")
+        logger.info("Creando SQLiteRepository con path: %s", db_path)
         
         try:
             repo = SQLiteRepository(db_path)
@@ -119,43 +125,26 @@ class RepositoryFactory:
             return repo
             
         except Exception as e:
-            logger.error(f"Error creando SQLiteRepository: {e}")
+            logger.error("Error creando SQLiteRepository: %s", e)
             raise
     
     @staticmethod
     def create_sqlite_for_migration(db_path: str) -> SQLiteRepository:
         """
         Create a SQLite repository for migration purposes.
-        
-        This is a convenience method for creating SQLite repositories
-        when doing data migrations, without needing full settings.
-        
-        Args:
-            db_path: Path to SQLite database file
-        
-        Returns:
-            SQLiteRepository instance
         """
-        logger.info(f"Creando SQLiteRepository para migración: {db_path}")
+        logger.info("Creando SQLiteRepository para migración: %s", db_path)
         return SQLiteRepository(db_path)
     
     @staticmethod
     def create_sqlite_for_backup(backup_path: str) -> SQLiteRepository:
         """
         Create a SQLite repository for backup purposes.
-        
-        Args:
-            backup_path: Path for the backup database file
-        
-        Returns:
-            SQLiteRepository instance
         """
-        logger.info(f"Creando SQLiteRepository para backup: {backup_path}")
+        logger.info("Creando SQLiteRepository para backup: %s", backup_path)
         
-        # Create a new database for the backup
         repo = SQLiteRepository(backup_path)
         
-        # Initialize tables for the backup
         try:
             repo.db.crear_tablas_nucleo()
             repo.db.crear_tabla_equipos()
@@ -165,7 +154,7 @@ class RepositoryFactory:
             repo.db.asegurar_tablas_mantenimiento()
             logger.info("Tablas de backup creadas exitosamente")
         except Exception as e:
-            logger.error(f"Error creando tablas de backup: {e}")
+            logger.error("Error creando tablas de backup: %s", e)
             raise
         
         return repo
