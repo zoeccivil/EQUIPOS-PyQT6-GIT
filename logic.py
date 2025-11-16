@@ -5,7 +5,7 @@ import logging
 import calendar
 from datetime import datetime, date
 import uuid # Asegúrate de que esta línea esté al inicio de tu archivo logic.py
-
+from typing import List # <--- AÑADIDO
 
 # Configura logging para archivo y consola
 logging.basicConfig(
@@ -60,9 +60,9 @@ class DatabaseManager:
             """
             CREATE TABLE IF NOT EXISTS cuentas (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                nombre TEXT NOT NULL,
+                nombre TEXT NOT NULL UNIQUE,
                 tipo_cuenta TEXT,
-                UNIQUE(nombre, tipo_cuenta)
+                tipo TEXT DEFAULT 'normal'
             )
             """,
             """
@@ -72,15 +72,32 @@ class DatabaseManager:
             )
             """,
             """
+            CREATE TABLE IF NOT EXISTS subcategorias (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                nombre TEXT NOT NULL,
+                categoria_id INTEGER NOT NULL,
+                mantenimiento_intervalo_horas INTEGER DEFAULT NULL,
+                mantenimiento_trigger_tipo TEXT CHECK(mantenimiento_trigger_tipo IN ('HORAS', 'KM', 'DIAS')),
+                mantenimiento_trigger_valor REAL,
+                FOREIGN KEY(categoria_id) REFERENCES categorias(id) ON DELETE CASCADE,
+                UNIQUE(nombre, categoria_id)
+            )
+            """,
+            """
             CREATE TABLE IF NOT EXISTS equipos (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                proyecto_id INTEGER,
+                proyecto_id INTEGER NOT NULL,
                 nombre TEXT NOT NULL,
+                placa TEXT,
+                ficha TEXT,
                 marca TEXT,
                 modelo TEXT,
                 categoria TEXT,
-                equipo TEXT,
-                activo INTEGER DEFAULT 1
+                subcategoria TEXT,
+                activo INTEGER DEFAULT 1,
+                mantenimiento_trigger_tipo TEXT CHECK(mantenimiento_trigger_tipo IN ('HORAS', 'KM', 'DIAS')),
+                mantenimiento_trigger_valor REAL,
+                categoria_id INTEGER
             )
             """,
             """
@@ -89,6 +106,7 @@ class DatabaseManager:
                 proyecto_id INTEGER,
                 cuenta_id INTEGER,
                 categoria_id INTEGER,
+                subcategoria_id INTEGER,
                 equipo_id INTEGER,
                 tipo TEXT NOT NULL CHECK(tipo IN ('Ingreso', 'Gasto')),
                 descripcion TEXT,
@@ -101,7 +119,10 @@ class DatabaseManager:
                 conduce TEXT,
                 ubicacion TEXT,
                 horas REAL,
-                precio_por_hora REAL
+                precio_por_hora REAL,
+                kilometros REAL DEFAULT 0,
+                conduce_adjunto_path TEXT,
+                FOREIGN KEY(subcategoria_id) REFERENCES subcategorias(id)
             )
             """,
             """
@@ -110,6 +131,184 @@ class DatabaseManager:
                 cuenta_id INTEGER,
                 is_principal INTEGER DEFAULT 0,
                 PRIMARY KEY (proyecto_id, cuenta_id)
+            )
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS proyecto_categorias (
+                proyecto_id INTEGER NOT NULL,
+                categoria_id INTEGER NOT NULL,
+                presupuesto REAL DEFAULT 0,
+                PRIMARY KEY(proyecto_id, categoria_id),
+                FOREIGN KEY(proyecto_id) REFERENCES proyectos(id) ON DELETE CASCADE,
+                FOREIGN KEY(categoria_id) REFERENCES categorias(id) ON DELETE CASCADE
+            )
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS proyecto_subcategorias (
+                proyecto_id INTEGER NOT NULL,
+                subcategoria_id INTEGER NOT NULL,
+                presupuesto REAL DEFAULT 0,
+                PRIMARY KEY(proyecto_id, subcategoria_id),
+                FOREIGN KEY(proyecto_id) REFERENCES proyectos(id) ON DELETE CASCADE,
+                FOREIGN KEY(subcategoria_id) REFERENCES subcategorias(id) ON DELETE CASCADE
+            )
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS presupuestos (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                proyecto_id INTEGER NOT NULL,
+                subcategoria_id INTEGER NOT NULL,
+                monto REAL NOT NULL,
+                FOREIGN KEY(proyecto_id) REFERENCES proyectos(id) ON DELETE CASCADE,
+                FOREIGN KEY(subcategoria_id) REFERENCES subcategorias(id) ON DELETE CASCADE,
+                UNIQUE(proyecto_id, subcategoria_id)
+            )
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS operadores (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                nombre TEXT NOT NULL UNIQUE,
+                cedula TEXT,
+                telefono TEXT,
+                activo INTEGER DEFAULT 1
+            )
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS transferencias (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                proyecto_id INTEGER NOT NULL,
+                cuenta_origen_id INTEGER NOT NULL,
+                cuenta_destino_id INTEGER NOT NULL,
+                monto REAL NOT NULL,
+                fecha DATE NOT NULL,
+                descripcion TEXT,
+                FOREIGN KEY(proyecto_id) REFERENCES proyectos(id) ON DELETE CASCADE,
+                FOREIGN KEY(cuenta_origen_id) REFERENCES cuentas(id),
+                FOREIGN KEY(cuenta_destino_id) REFERENCES cuentas(id)
+            )
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS companies (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL UNIQUE,
+                rnc TEXT UNIQUE,
+                address TEXT,
+                legacy_filename TEXT,
+                itbis_adelantado REAL DEFAULT 0.0,
+                invoice_template_path TEXT,
+                invoice_output_base_path TEXT,
+                address_line1 TEXT DEFAULT '',
+                address_line2 TEXT DEFAULT '',
+                phone TEXT DEFAULT '',
+                email TEXT DEFAULT '',
+                signature_name TEXT DEFAULT '',
+                logo_path TEXT DEFAULT '',
+                invoice_due_date TEXT DEFAULT ''
+            )
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS currencies (
+                name TEXT PRIMARY KEY
+            )
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS third_parties (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                rnc TEXT NOT NULL UNIQUE,
+                name TEXT NOT NULL COLLATE NOCASE
+            )
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS settings (
+                key TEXT PRIMARY KEY,
+                value TEXT
+            )
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS invoices (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                company_id INTEGER NOT NULL,
+                invoice_type TEXT NOT NULL,
+                invoice_date TEXT NOT NULL,
+                imputation_date TEXT,
+                invoice_number TEXT NOT NULL,
+                invoice_category TEXT,
+                rnc TEXT,
+                third_party_name TEXT,
+                currency TEXT,
+                itbis REAL DEFAULT 0.0,
+                total_amount REAL DEFAULT 0.0,
+                exchange_rate REAL DEFAULT 1.0,
+                total_amount_rd REAL DEFAULT 0.0,
+                attachment_path TEXT,
+                client_name TEXT,
+                client_rnc TEXT,
+                excel_path TEXT,
+                pdf_path TEXT,
+                due_date TEXT,
+                FOREIGN KEY (company_id) REFERENCES companies (id)
+            )
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS invoice_items (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                invoice_id INTEGER NOT NULL,
+                description TEXT NOT NULL,
+                quantity REAL NOT NULL,
+                unit_price REAL NOT NULL,
+                item_code TEXT,
+                unit TEXT,
+                FOREIGN KEY (invoice_id) REFERENCES invoices (id) ON DELETE CASCADE
+            )
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS quotations (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                company_id INTEGER NOT NULL,
+                quotation_date TEXT NOT NULL,
+                quotation_number TEXT NOT NULL,
+                client_name TEXT,
+                client_rnc TEXT,
+                currency TEXT,
+                itbis REAL DEFAULT 0.0,
+                total_amount REAL DEFAULT 0.0,
+                pdf_path TEXT,
+                FOREIGN KEY (company_id) REFERENCES companies (id)
+            )
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS quotation_items (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                quotation_id INTEGER NOT NULL,
+                description TEXT NOT NULL,
+                quantity REAL NOT NULL,
+                unit_price REAL NOT NULL,
+                item_code TEXT,
+                unit TEXT,
+                FOREIGN KEY (quotation_id) REFERENCES quotations (id) ON DELETE CASCADE
+            )
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS tax_calculations (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                company_id INTEGER NOT NULL,
+                period TEXT NOT NULL,
+                total_sales REAL DEFAULT 0.0,
+                total_purchases REAL DEFAULT 0.0,
+                itbis_collected REAL DEFAULT 0.0,
+                itbis_paid REAL DEFAULT 0.0,
+                balance REAL DEFAULT 0.0,
+                FOREIGN KEY (company_id) REFERENCES companies (id),
+                UNIQUE(company_id, period)
+            )
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS tax_calculation_details (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                tax_calculation_id INTEGER NOT NULL,
+                invoice_id INTEGER NOT NULL,
+                FOREIGN KEY (tax_calculation_id) REFERENCES tax_calculations (id) ON DELETE CASCADE,
+                FOREIGN KEY (invoice_id) REFERENCES invoices (id) ON DELETE CASCADE
             )
             """
         ]
@@ -357,13 +556,18 @@ class DatabaseManager:
         self._conn.execute("""
             CREATE TABLE IF NOT EXISTS equipos (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                proyecto_id INTEGER,
+                proyecto_id INTEGER NOT NULL,
                 nombre TEXT NOT NULL,
+                placa TEXT,
+                ficha TEXT,
                 marca TEXT,
                 modelo TEXT,
                 categoria TEXT,
-                equipo TEXT,
-                activo INTEGER DEFAULT 1
+                subcategoria TEXT,
+                activo INTEGER DEFAULT 1,
+                mantenimiento_trigger_tipo TEXT CHECK(mantenimiento_trigger_tipo IN ('HORAS', 'KM', 'DIAS')),
+                mantenimiento_trigger_valor REAL,
+                categoria_id INTEGER
             )
         """)
         self._conn.commit()
@@ -380,7 +584,8 @@ class DatabaseManager:
                 precio_por_hora REAL,
                 conduce TEXT,
                 ubicacion TEXT,
-                conduce_adjunto_path TEXT
+                conduce_adjunto_path TEXT,
+                equipo_id INTEGER
             )
         """)
         self._conn.commit()
@@ -1394,11 +1599,13 @@ class DatabaseManager:
         query = """
             CREATE TABLE IF NOT EXISTS equipos_entidades (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
+                proyecto_id INTEGER NOT NULL,
                 nombre TEXT NOT NULL,
-                tipo TEXT NOT NULL,
-                proyecto_id INTEGER,
-                activo INTEGER DEFAULT 1,
-                UNIQUE(nombre, tipo, proyecto_id)
+                tipo TEXT NOT NULL CHECK (tipo IN ('Cliente','Operador')),
+                activo INTEGER NOT NULL DEFAULT 1,
+                telefono TEXT,
+                cedula TEXT,
+                UNIQUE (proyecto_id, nombre, tipo)
             )
         """
         self.execute(query)
@@ -1466,6 +1673,30 @@ class DatabaseManager:
         """
         return self.fetchone("SELECT * FROM equipos_entidades WHERE id = ?", (entidad_id,))
 
+    # --- NUEVA FUNCION AÑADIDA ---
+    def obtener_columnas_de_tabla(self, nombre_tabla: str) -> List[str]:
+        """
+        Obtiene la lista de nombres de columnas para una tabla específica.
+        Utiliza PRAGMA_table_info de SQLite.
+        
+        Args:
+            nombre_tabla: El nombre de la tabla (ej. "proyectos")
+            
+        Returns:
+            Una lista de strings con los nombres de las columnas.
+        """
+        try:
+            # PRAGMA_table_info es la forma estándar de SQLite de introspectar una tabla
+            columnas_info = self.fetchall(f"PRAGMA table_info({nombre_tabla})")
+            
+            # El nombre de la columna está en el campo 'name' de los resultados
+            nombres = [info['name'] for info in columnas_info]
+            logger.debug(f"Columnas para {nombre_tabla}: {nombres}")
+            return nombres
+        except Exception as e:
+            logger.error(f"Error obteniendo columnas para {nombre_tabla}: {e}")
+            return []
+
 # --- CLASES DE DATOS (MODELOS) ---
 class Transaccion:
     def __init__(self, **kwargs):
@@ -1503,5 +1734,3 @@ class Proyecto:
         self.nombre = datos_proyecto['nombre']
         self.moneda = datos_proyecto['moneda']
         return True
-    
-       

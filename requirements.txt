@@ -1,0 +1,13 @@
+# PyQt6 for GUI
+PyQt6>=6.4.0
+
+# Firestore and Firebase dependencies
+requests>=2.28.0
+
+# Note: For Firestore with email/password authentication, we use Firebase REST API
+# which only requires the 'requests' library. This avoids the need for
+# firebase-admin and service account JSON files.
+
+# For production, you may also want:
+# - python-dotenv (for environment variables)
+# - cryptography (for secure credential storage)

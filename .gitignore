@@ -1,0 +1,66 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual environments
+venv/
+env/
+ENV/
+.venv
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Application specific
+*.log
+progain.log
+*.db
+!progain_database.db
+
+# Configuration files (may contain sensitive data)
+app_settings.json
+equipos_config.json
+
+# Backups
+backups/
+*.db.bak
+
+# Reports and generated files
+*.pdf
+*.xlsx
+*.xls
+Diagnostico_*.xlsx
+Reporte_*.xlsx
+Resultado_*.xlsx
+Lista_*.xlsx
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Temporary files
+tmp/
+temp/
+*.tmp
